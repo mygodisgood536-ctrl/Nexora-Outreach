@@ -1,0 +1,20 @@
+{
+  "name": "nexora-outreach",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Nexora Outreach - AI-powered prospecting and outreach, on autopilot.",
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "node --test test/unit/*.test.js",
+    "test:e2e": "node --test test/e2e/*.test.js",
+    "test:file": "node --test",
+    "probe:opencode": "node scripts/probe-opencode.js",
+    "probe:discovery": "node scripts/probe-discovery.js",
+    "migrate": "node scripts/migrate.js"
+  },
+  "dependencies": {}
+}

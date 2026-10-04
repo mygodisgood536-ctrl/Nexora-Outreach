@@ -1,0 +1,393 @@
+-- ═══════════════════════════════════════════════════════════════════
+-- Nexora Outreach — persistent schema (spec §28 High-Level Data Model)
+-- ═══════════════════════════════════════════════════════════════════
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+-- ── Accounts & authentication (spec §5) ──────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  full_name         TEXT    NOT NULL,
+  username          TEXT    NOT NULL,
+  username_lower    TEXT    NOT NULL UNIQUE,   -- server-side uniqueness (§5.1)
+  security_question TEXT    NOT NULL,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  recovery_code_hash TEXT,                     -- safe recovery, NOT the security question (§5.3)
+  failed_attempts   INTEGER NOT NULL DEFAULT 0,
+  locked_until      TEXT,                      -- progressive lockout (§5.3)
+  automation_paused INTEGER NOT NULL DEFAULT 0, -- "Pause All Automation" (§26)
+  timezone          TEXT    NOT NULL DEFAULT 'UTC',
+  created_ms        INTEGER NOT NULL DEFAULT 0,
+  deleted_at        TEXT
+);
+
+-- Security answer stored ONLY as a scrypt hash (§5.2)
+CREATE TABLE IF NOT EXISTS security_credentials (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  algo         TEXT    NOT NULL DEFAULT 'scrypt',
+  salt_hex     TEXT    NOT NULL,
+  hash_hex     TEXT    NOT NULL,
+  params       TEXT    NOT NULL,
+  updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id           TEXT    PRIMARY KEY,             -- hashed token id
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+  expires_at   TEXT    NOT NULL,
+  revoked_at   TEXT,                            -- explicit revocation (§5.3)
+  last_seen_at TEXT,
+  user_agent   TEXT,
+  ip           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  username_lower TEXT NOT NULL,
+  at             TEXT NOT NULL DEFAULT (datetime('now')),
+  ok             INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(username_lower, at);
+
+-- One-time account recovery codes (spec §5.3).
+-- Each code is shown exactly once at creation. Only its scrypt hash is stored,
+-- and every code carries its own salt so the codes are independent of each other.
+CREATE TABLE IF NOT EXISTS recovery_codes (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash    TEXT    NOT NULL,
+  algo         TEXT    NOT NULL DEFAULT 'scrypt',
+  salt_hex     TEXT    NOT NULL,
+  params       TEXT    NOT NULL,
+  used_at      TEXT,                            -- NULL until redeemed
+  created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id);
+
+-- ── Email authorization (spec §6) ────────────────────────────────
+CREATE TABLE IF NOT EXISTS email_connections (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider          TEXT    NOT NULL,          -- 'google' | 'microsoft' | ...
+  account_email     TEXT,
+  -- Encrypted with AES-256-GCM. Never exposed to the frontend.
+  access_token_enc  TEXT,
+  refresh_token_enc TEXT,
+  scopes            TEXT,
+  token_expires_at  TEXT,
+  status            TEXT    NOT NULL DEFAULT 'disconnected',
+  status_detail     TEXT,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, provider)
+);
+
+-- OAuth `state` nonces (spec §6). Persisted so a callback can only be
+-- accepted if this server issued it: one-time use, short expiry, and the
+-- raw value is never stored — only its SHA-256 digest.
+CREATE TABLE IF NOT EXISTS oauth_states (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  state_hash   TEXT    NOT NULL UNIQUE,   -- sha256 hex of the nonce we issued
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider     TEXT    NOT NULL,
+  expires_at   TEXT    NOT NULL,
+  consumed_at  TEXT,
+  created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_states_user ON oauth_states(user_id);
+
+-- ── Missions (spec §8) ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS missions (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name                 TEXT    NOT NULL,
+  objective_raw        TEXT,                    -- user's natural-language description
+  service              TEXT    NOT NULL,         -- website_design|email_marketing|seo|social|branding|...
+  offer_summary        TEXT,
+  target_description   TEXT,
+  investigation_notes  TEXT,
+  outreach_instructions TEXT,
+  sending_mode         TEXT    NOT NULL DEFAULT 'scout_only',
+  timezone             TEXT    NOT NULL DEFAULT 'UTC',
+  follow_up_delay_days INTEGER NOT NULL DEFAULT 2,
+  max_follow_ups       INTEGER NOT NULL DEFAULT 3,
+  daily_send_limit     INTEGER NOT NULL DEFAULT 20,
+  max_leads_per_run    INTEGER NOT NULL DEFAULT 25,
+  status               TEXT    NOT NULL DEFAULT 'draft',
+  activated_at         TEXT,
+  last_run_at          TEXT,
+  next_run_at          TEXT,
+  interpreted_json     TEXT,                    -- NL -> structured settings, shown for review (§8)
+  interpreted_reviewed INTEGER NOT NULL DEFAULT 0,
+  archived_at          TEXT,
+  created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_missions_user ON missions(user_id, status);
+
+CREATE TABLE IF NOT EXISTS mission_windows (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  mission_id  INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  day_of_week INTEGER NOT NULL,                 -- 0=Sun .. 6=Sat
+  start_min   INTEGER NOT NULL,                 -- minutes from midnight LOCAL time
+  end_min     INTEGER NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mission_windows ON mission_windows(mission_id, day_of_week);
+
+CREATE TABLE IF NOT EXISTS target_locations (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  mission_id INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  country    TEXT    NOT NULL,                 -- ISO-3166 alpha-2. Never a vague region (§9)
+  region     TEXT,
+  city       TEXT,
+  priority   TEXT    NOT NULL DEFAULT 'medium',
+  created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_target_locations ON target_locations(mission_id, country);
+
+-- ── Leads (spec §11/§14) ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS leads (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  mission_id         INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  business_name      TEXT    NOT NULL,
+  website_url        TEXT,
+  domain             TEXT,
+  dedupe_key         TEXT    NOT NULL,          -- normalized identity (§29)
+  country            TEXT,
+  region             TEXT,
+  city               TEXT,
+  address            TEXT,
+  phone_public       TEXT,                      -- PUBLIC business phone only
+  email_public       TEXT,                      -- PUBLIC business email only, never inferred
+  contact_route      TEXT,
+  contact_evidence   TEXT,
+  discovery_source   TEXT    NOT NULL,
+  discovery_meta     TEXT,
+  rating             REAL,
+  review_count       INTEGER,
+  status             TEXT    NOT NULL DEFAULT 'discovered',
+  stage_error        TEXT,
+  first_contacted_at TEXT,
+  created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_leads_mission ON leads(mission_id, status);
+CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id, created_at);
+-- Cross-mission duplicate prevention (§29)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_user_dedupe ON leads(user_id, dedupe_key);
+
+CREATE TABLE IF NOT EXISTS website_analyses (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id    INTEGER NOT NULL UNIQUE REFERENCES leads(id) ON DELETE CASCADE,
+  url        TEXT,
+  ok         INTEGER NOT NULL DEFAULT 0,
+  error      TEXT,
+  evidence   TEXT,     -- JSON array of concrete observable findings
+  findings   TEXT,     -- JSON summary
+  score      INTEGER,  -- 0-100 heuristic signal, not the AI verdict
+  method     TEXT,
+  fetched_ms INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Businesses with no website still get investigated (spec §13)
+CREATE TABLE IF NOT EXISTS presence_analyses (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id    INTEGER NOT NULL UNIQUE REFERENCES leads(id) ON DELETE CASCADE,
+  evidence   TEXT,
+  findings   TEXT,
+  score      INTEGER,
+  method     TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS qualifications (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id          INTEGER NOT NULL UNIQUE REFERENCES leads(id) ON DELETE CASCADE,
+  model            TEXT,
+  qualified        INTEGER NOT NULL DEFAULT 0,
+  confidence       REAL,
+  reason           TEXT,
+  observed         TEXT,
+  opportunity      TEXT,
+  relevant_service TEXT,
+  explanation      TEXT,
+  error            TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── Outreach / conversations (spec §15/§18/§19) ──────────────────
+CREATE TABLE IF NOT EXISTS conversations (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id           INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  mission_id        INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status            TEXT    NOT NULL DEFAULT 'sent',
+  thread_key        TEXT,
+  remote_message_id TEXT,
+  last_inbound_at   TEXT,
+  last_outbound_at  TEXT,
+  reply_count       INTEGER NOT NULL DEFAULT 0,
+  followups_sent    INTEGER NOT NULL DEFAULT 0,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(lead_id, mission_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, status);
+
+CREATE TABLE IF NOT EXISTS outreach_messages (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id    INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  lead_id            INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  mission_id         INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  kind               TEXT    NOT NULL DEFAULT 'initial',
+  subject            TEXT    NOT NULL,
+  body_text          TEXT    NOT NULL,
+  body_html          TEXT,
+  model              TEXT,
+  approved           INTEGER NOT NULL DEFAULT 0,
+  approved_at        TEXT,
+  send_status        TEXT    NOT NULL DEFAULT 'draft',
+  provider           TEXT,
+  provider_message_id TEXT,
+  idempotency_key    TEXT UNIQUE,             -- prevents duplicate send (§30)
+  error              TEXT,
+  sent_at            TEXT,
+  opened_at          TEXT,
+  created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_messages_conv ON outreach_messages(conversation_id, kind);
+
+CREATE TABLE IF NOT EXISTS follow_ups (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id  INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  lead_id          INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  mission_id       INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  sequence         INTEGER NOT NULL DEFAULT 1,
+  due_at           TEXT    NOT NULL,
+  status           TEXT    NOT NULL DEFAULT 'pending',
+  message_id       INTEGER REFERENCES outreach_messages(id) ON DELETE SET NULL,
+  reason_cancelled TEXT,
+  created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_followups_due ON follow_ups(status, due_at);
+
+-- ── AI runtime selection (spec §7/§31) ───────────────────────────
+-- The CATALOG is always discovered live from OpenCode at runtime.
+-- This table persists only the user's current selection.
+CREATE TABLE IF NOT EXISTS ai_settings (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  provider   TEXT,
+  model      TEXT,                              -- full provider/model id from OpenCode
+  agent      TEXT,
+  updated_at TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_by TEXT    NOT NULL DEFAULT 'system'
+);
+
+CREATE TABLE IF NOT EXISTS ai_call_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  purpose    TEXT NOT NULL,   -- interpret_mission|analyze_site|qualify|write_outreach|reply
+  model      TEXT,
+  ok         INTEGER NOT NULL DEFAULT 0,
+  ms         INTEGER,
+  error      TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_call_log ON ai_call_log(user_id, created_at);
+-- ── Automation (spec §23) ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS automation_jobs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  mission_id      INTEGER REFERENCES missions(id) ON DELETE CASCADE,
+  stage           TEXT    NOT NULL,
+  payload         TEXT    NOT NULL DEFAULT '{}',
+  status          TEXT    NOT NULL DEFAULT 'queued',
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  max_attempts    INTEGER NOT NULL DEFAULT 3,
+  run_after       TEXT    NOT NULL DEFAULT (datetime('now')),
+  lease_until     TEXT,
+  worker_id       TEXT,
+  idempotency_key TEXT UNIQUE,
+  result          TEXT,
+  last_error      TEXT,
+  error_kind      TEXT,       -- browser|ai|email|qualification|discovery|system (§30)
+  started_at      TEXT,
+  finished_at     TEXT,
+  created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_claim ON automation_jobs(status, run_after);
+CREATE INDEX IF NOT EXISTS idx_jobs_mission ON automation_jobs(mission_id, stage);
+
+CREATE TABLE IF NOT EXISTS job_history (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES automation_jobs(id) ON DELETE CASCADE,
+  event  TEXT NOT NULL,
+  detail TEXT,
+  at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── Notifications (spec §25) ─────────────────────────────────────
+CREATE TABLE IF NOT EXISTS notifications (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT    NOT NULL,
+  severity   TEXT    NOT NULL DEFAULT 'info',
+  title      TEXT    NOT NULL,
+  body       TEXT,
+  mission_id INTEGER REFERENCES missions(id) ON DELETE SET NULL,
+  lead_id    INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+  read_at    TEXT,
+  created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, created_at);
+
+-- ── Suppression / opt-out (spec §17/§29) ─────────────────────────
+CREATE TABLE IF NOT EXISTS suppressions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  scope      TEXT    NOT NULL,      -- email|domain|conversation|bounce|complaint|manual
+  value      TEXT    NOT NULL,
+  reason     TEXT,
+  source     TEXT,
+  created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, scope, value)
+);
+CREATE INDEX IF NOT EXISTS idx_suppressions_user ON suppressions(user_id);
+
+-- ── Audit (spec §5.3/§17/§30) ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS audit_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor       TEXT    NOT NULL DEFAULT 'system',
+  action      TEXT    NOT NULL,
+  entity_type TEXT,
+  entity_id   TEXT,
+  detail      TEXT,
+  ip          TEXT,
+  at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_events(user_id, at);
+
+-- ── Sent-volume guard (deliverability, spec §17) ──────────────────
+CREATE TABLE IF NOT EXISTS send_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  mission_id INTEGER REFERENCES missions(id) ON DELETE SET NULL,
+  sent_on    TEXT    NOT NULL,
+  count      INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(user_id, mission_id, sent_on)
+);
+
+-- ── Runtime meta ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);

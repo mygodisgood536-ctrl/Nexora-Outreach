@@ -1,0 +1,520 @@
+
+NEXORA OUTREACH
+Full Product Vision, Architecture & Cline Implementation Instructions
+AI-powered prospecting and outreach, on autopilot.
+1. Purpose
+This document is the implementation source of truth for building Nexora Outreach. Cline must use it as the product and engineering specification. The goal is not a simple lead generator or email sender. The goal is an autonomous prospecting and outreach platform that discovers relevant business opportunities, investigates them, analyzes websites or online presence, qualifies prospects, generates individualized outreach, sends messages through the user's authorized mailbox, monitors conversations, follows up when appropriate, and immediately notifies the user when a prospect replies.
+The application must be a real production system with persistent backend jobs, scheduling, queues, secure authentication, OpenCode integration, email authorization, auditability, recovery, and a responsive UI.
+2. Product Identity
+Product: Nexora Outreach
+Short description: AI-powered prospecting and outreach, on autopilot.
+Primary purpose: Find opportunities, investigate them, personalize outreach, manage follow-ups, and surface replies with minimal manual work.
+Initial example: a website designer finding businesses that need a new or improved website.
+Long-term purpose: support many services and markets without rebuilding the product.
+3. Core Vision
+USER
+  ↓
+Create account
+  ↓
+Connect authorized outreach mailbox
+  ↓
+Create scouting mission
+  ├─ What do I offer?
+  ├─ Who am I looking for?
+  ├─ What countries/regions?
+  ├─ What should Nexora look for?
+  ├─ How should messages sound and what should they contain?
+  └─ When should Nexora scout?
+  ↓
+ACTIVATE MISSION
+  ↓
+AUTONOMOUS SCOUT
+  ↓
+Discover → Investigate → Analyze → Qualify → Personalize → Send
+  ↓
+Monitor mailbox
+  ├─ Reply → notify user immediately + stop automated follow-ups
+  └─ No reply after configured period → generate/send follow-up
+4. The Product Must Not Be Locked to One Niche
+Do not hard-code Nexora as a restaurant finder or website redesign tool. Website redesign for restaurants is the first concrete use case. The user must be able to change what they are scouting for and who they are scouting.
+Website designer: businesses with outdated, broken, weak, or missing websites.
+Email marketer: businesses with opportunities for email marketing/customer retention.
+SEO specialist: businesses with potential local/search visibility opportunities.
+Social media service: businesses with weak or inactive social presence.
+Graphic designer: businesses with branding/visual communication opportunities.
+The user can describe the objective in natural language. Nexora should interpret that objective and adapt discovery, research, qualification, and outreach accordingly.
+5. Account Creation and Login
+5.1 Sign-up
+Full name
+Unique username
+Security question
+Security answer
+When a username is entered, check availability immediately. If already used, require a different username. Enforce uniqueness server-side as well as in the UI.
+5.2 Login
+The requested login flow uses username plus the account's security question/answer credential. The answer must never be stored in plain text. Store a secure one-way hash using an appropriate password/KDF approach.
+5.3 Security
+Server-side credential validation.
+Rate limiting and progressive lockout for repeated failed attempts.
+Secure sessions with expiration and revocation.
+Encrypted storage for sensitive email authorization tokens.
+A safe account recovery mechanism; do not rely only on a guessable security question.
+Audit important account and automation events.
+6. User Email Account
+The user must connect the mailbox Nexora will use to send outreach and monitor replies. Nexora must not ask the user to type their normal email password into Nexora. Use OAuth/API authorization where supported.
+Initial connection targets: Gmail/Google Workspace and Microsoft/Outlook.
+Send outreach.
+Read incoming replies with minimum required authorization.
+Detect replies.
+Run follow-ups.
+Disconnect/reconnect mailbox.
+Pause sending.
+Show connection status.
+Keep email integrations behind a provider abstraction so more providers can be added later.
+No email provider can guarantee inbox placement. Deliverability depends on domain authentication, reputation, volume, bounces, complaints, message quality, recipient engagement, and provider rules. Nexora must provide safe sending controls instead of promising spam-free delivery.
+7. OpenCode Is the AI Provider/Model Layer
+OpenCode must be installed, implemented, and integrated into the platform as the central AI provider/model runtime. Do not separately hard-code integrations for every provider and model.
+NEXORA OUTREACH
+      ↓
+Central AI Runtime
+      ↓
+OpenCode adapter/integration
+      ↓
+Selected provider + selected model
+      ↓
+AI execution
+Provider/model discovery must come from the OpenCode integration rather than a permanent hard-coded Nexora list.
+The user can select a provider and model exposed by OpenCode.
+The selected configuration is persisted safely.
+Backend AI workers use the selected configuration.
+New provider/model availability from OpenCode should be reflected without building a separate Nexora integration for every provider.
+Never expose provider credentials unnecessarily to the browser.
+Create one internal AI Runtime interface. Nexora business logic should call this interface. The OpenCode adapter handles provider/model resolution, execution, streaming where useful, structured outputs, errors, retries, and runtime diagnostics.
+AI should handle reasoning tasks such as research interpretation, website/design assessment, qualification, personalized writing, and reply interpretation. Deterministic backend code should handle scheduling, queues, database state, sending limits, OAuth, email transport, notifications, retries, deduplication, and audit logs.
+8. Scouting Missions
+A mission is the user's reusable autonomous prospecting configuration. Multiple missions must be supported.
+Mission name.
+What the user offers.
+Who the user wants to find.
+Countries/regions/cities.
+What Nexora should investigate.
+Outreach instructions: tone, length, offer, required points, restrictions.
+Scouting days.
+Multiple time windows.
+Timezone.
+Connected email account.
+Follow-up policy.
+Sending/scouting limits.
+Active/paused state.
+The user should be able to describe a mission in normal language. Nexora can translate it into structured settings, but must show the interpreted settings for review before activation.
+9. Country and Region Targeting
+Country targeting is a first-class feature. The user can select one country, multiple countries, or specific cities/regions.
+USA only.
+USA + Germany + Spain + Italy.
+Specific US cities only.
+Specific countries in the Middle East, selected individually.
+Do not create one vague 'Arab' geography. Use actual countries such as UAE, Saudi Arabia, Qatar, Kuwait, Bahrain, Oman, Jordan, etc.
+Optionally allow country priority, for example USA = High, Germany = Medium, Italy = Low.
+10. User-Selected Scouting Hours
+Scouting hours must be configurable. The example 10am–1pm, 5pm–8pm, and 12am–4am is not a fixed product rule.
+Select days of the week.
+Add multiple time windows.
+Edit/remove windows.
+Choose timezone; default to the user's configured timezone.
+Show the next scouting window.
+Pause/resume a mission.
+Example:
+Monday–Friday
+10:00 AM → 1:00 PM
+5:00 PM → 8:00 PM
+12:00 AM → 4:00 AM
+Timezone: Africa/Lagos
+At the beginning of an active window, start eligible queued jobs automatically. At the end, stop starting new jobs while allowing a safe in-progress operation to finish or become recoverable. Persist state so work survives restarts. The user must not manually start every session.
+Global Pause All Automation.
+Mission-level Pause.
+Safe Stop.
+Job recovery after restart.
+11. Business Discovery
+For the initial website-design mission, Nexora should discover businesses using permitted/authorized business-data and web-search sources. Google Maps/business listings are an important discovery source, but implementation must use permitted APIs/data access or another authorized source rather than indiscriminate scraping of the Maps interface.
+Example target:
+restaurants in USA
+
+Candidate:
+ABC Restaurant
+4.5 stars
+800 reviews
+Website available
+Public business information
+Discovery must be configurable because different missions may require different business types and discovery sources.
+12. Website Investigation
+When a candidate has a website, Nexora should open and inspect it using an authorized browser/research mechanism.
+Mobile/responsive behavior.
+Visual hierarchy.
+Typography and spacing.
+Navigation clarity.
+Homepage clarity.
+Service/product presentation.
+Restaurant menu presentation.
+Online ordering where relevant.
+Reservation/booking where relevant.
+Clear contact method.
+Calls to action.
+Important business information.
+Broken links/pages where detectable.
+Obvious usability problems.
+Outdated/incomplete design.
+Basic performance indicators where safely measurable.
+The analysis should explain concrete evidence, not merely say 'the website looks bad.' For example, record an observable issue such as a mobile navigation overlap or unclear CTA.
+13. Businesses Without Websites
+A missing website must not automatically disqualify a business.
+ABC Restaurant
+4.5 stars
+800 reviews
+No website listed
+
+Investigate legitimate public business information:
+→ public business contact
+→ official/public business pages
+→ ordering/reservation presence
+→ other official online presence
+→ how customers currently reach the business
+
+Potential finding:
+The business appears to rely heavily on a listing + phone contact
+and may have an opportunity for a proper website.
+Do not invent contact information. Do not treat unrelated information as an official contact without evidence. Respect privacy, platform terms, and applicable data-use rules.
+14. Lead Qualification
+Nexora should not contact every discovered business. It must determine whether the prospect is relevant and whether there is a concrete opportunity.
+Why the lead was discovered.
+What was observed.
+What opportunity exists.
+What service appears relevant.
+Quality/confidence indicators with explanations.
+Available contact route.
+Previous contact state.
+Suppression/opt-out state.
+Do not repeatedly contact the same business as if it were a new lead.
+15. Personalized Outreach
+Every qualified prospect must receive an individualized message based on actual research. Do not use a mass template with only the business name changed.
+The user provides instructions about tone and content. Nexora writes and arranges the final message.
+Example user instruction:
+Write short, friendly, natural outreach.
+Do not sound like a generic sales pitch.
+Mention something specific that was actually observed.
+Offer to improve/redesign the website first without upfront payment.
+If they like the result, they can decide what they think the work is worth.
+Do not make false claims.
+Keep it easy to read.
+Different prospect, different message.
+Avoid repetitive openings and sentence structures.
+Avoid generic corporate filler.
+Do not fake personalization.
+Do not claim to have observed something that was not observed.
+Do not intentionally misrepresent an automated system as a human.
+Avoid decorative separators or formatting the user does not want.
+Keep messages short unless the mission says otherwise.
+16. Free-First Website Offer
+For the current website-design mission, the user wants to offer the redesign/improvement without requesting upfront payment. If the prospect likes the result, the prospect can decide what they believe the work is worth and pay accordingly.
+This must be a configurable mission instruction, not a universal hard-coded business rule. Nexora should decide whether the opportunity calls for a full redesign, homepage improvement, mobile improvement, or another appropriate service.
+17. Email Sending and Deliverability
+Send through the user's authorized mailbox or approved sending infrastructure. Do not promise that messages can never enter spam.
+Per-account and per-mission sending limits.
+Provider/API rate-limit awareness.
+Bounce handling.
+Complaint/abuse signal handling where available.
+Suppression list.
+Opt-out handling.
+Duplicate-contact prevention.
+Immediate sending pause.
+Do not send if mailbox authorization has expired.
+Do not continue automated outreach after a reply or opt-out.
+Audit every generated and sent message.
+18. Reply Monitoring
+Nexora must monitor the connected mailbox for incoming responses.
+🚨 NEW REPLY
+ABC Restaurant replied.
+
+Message:
+"Hi, thanks for reaching out..."
+
+Status:
+Reply received — automated follow-up paused.
+When a prospect replies, notify the user immediately. Automated follow-up for that conversation must stop.
+Track conversation states such as Sent, Delivered where supported, Opened where supported, No Reply, Reply Received, Follow-up Scheduled, Follow-up Sent, Suppressed, and Closed.
+Open tracking is approximate and must not be treated as perfectly reliable.
+19. Automatic Follow-Up
+Current requested default: if a message has no reply for 2 days, Nexora should generate and send a follow-up, subject to the mission's limits and policies.
+Day 0 → Initial message
+        ↓
+Monitor
+        ↓
+Reply → notify user + stop follow-up
+        ↓
+No reply after 2 days → generate personalized follow-up
+        ↓
+Send follow-up
+        ↓
+Continue monitoring within configured limits
+Follow-up timing must be configurable. Set a maximum number of automated follow-ups. Never continue after a reply or valid suppression/opt-out state.
+20. Dashboard
+The dashboard should make the autonomous system understandable.
+Active missions.
+Leads discovered.
+Leads qualified.
+Websites analyzed.
+Messages generated/sent.
+Replies received.
+Follow-ups due.
+Items requiring attention.
+Current scouting state.
+Next scouting session.
+NEXORA OUTREACH
+AI-powered prospecting and outreach, on autopilot.
+
+AUTOMATION
+2 missions active
+Next scouting: 5:00 PM
+Timezone: Africa/Lagos
+
+TODAY
+184 businesses discovered
+61 websites analyzed
+19 qualified
+14 messages sent
+3 replies
+5 follow-ups due
+
+RECENT ACTIVITY
+✓ Restaurant website analyzed
+✓ Qualified prospect found
+✓ Personalized outreach sent
+🚨 New reply from ABC Restaurant
+21. Lead Detail
+Business name.
+Website.
+Country/location.
+Discovery source.
+Public contact route.
+Website/online-presence analysis.
+Observed opportunity.
+Why Nexora selected the lead.
+Generated message.
+Send status.
+Conversation history.
+Follow-up status.
+Suppression status.
+User actions.
+22. Mission Management
+MY MISSIONS
+
+🟢 Restaurant Website Redesign
+USA
+Mon–Fri
+10:00–13:00, 17:00–20:00
+Email: connected
+Status: Running
+
+⏸ Email Marketing Prospects
+Germany + Spain
+Mon–Thu
+14:00–18:00
+Status: Paused
+
+[ + Create Mission ]
+Each mission should support Edit, Pause, Resume, Duplicate, View Leads, View Activity, and Archive/Delete according to a clear retention policy.
+23. Autonomous Worker Architecture
+Scheduler
+   ↓
+Mission Queue
+   ↓
+Discovery Worker
+   ↓
+Research/Browser Worker
+   ↓
+Website Analysis Worker
+   ↓
+Lead Qualification Worker
+   ↓
+Outreach Generation Worker
+   ↓
+Email Worker
+   ↓
+Mailbox Monitor
+   ↓
+Reply/Notification Worker
+   ↓
+Follow-Up Scheduler
+   ↓
+Follow-Up Generation + Email Worker
+Workers must support create, queue, run, pause, resume, safe interruption, recovery, bounded retry, termination, result/error reporting, and idempotency.
+24. Browser/Research Rules
+Use authorized browser/research mechanisms. Respect website terms, robots/access policies where applicable, provider rules, and rate limits. Do not bypass CAPTCHAs, authentication walls, access controls, or anti-bot protections.
+Capture useful structured evidence such as page titles, visible content, navigation outcomes, links, responsive evidence where technically appropriate, and detectable errors.
+25. Notifications
+Immediate prospect reply.
+Mailbox connection expired.
+Sending paused due to provider/deliverability problem.
+High-priority lead found.
+Follow-up due.
+AI/runtime error requiring attention.
+26. User Controls
+Pause All Automation.
+Pause Mission.
+Resume Mission.
+Safely stop current scouting.
+Disable automatic sending.
+Require approval before sending.
+Connect/disconnect mailbox.
+Edit scouting objective.
+Edit countries/regions.
+Edit schedule.
+Edit outreach instructions.
+Change follow-up timing and limits.
+27. Sending Modes
+Scout Only: research and qualify, never send.
+Review & Send: prepare messages for user approval.
+Autopilot: send qualified messages automatically within limits.
+The user can switch modes at any time.
+28. High-Level Data Model
+User — account identity.
+SecurityCredential — secure security-answer credential.
+EmailConnection — OAuth/API connection metadata and encrypted tokens.
+Mission — scouting objective and configuration.
+MissionSchedule — days, time windows, timezone.
+TargetLocation — countries/regions/cities.
+Lead — business/prospect record.
+WebsiteAnalysis — evidence and findings.
+Qualification — reason and relevance.
+OutreachMessage — generated/sent message.
+Conversation — thread state.
+FollowUp — scheduled/sent follow-up.
+AutomationJob — worker state.
+Notification — user alerts.
+Suppression — opt-out/do-not-contact state.
+AuditEvent — important system actions.
+29. Deduplication, Privacy, and Safety
+Normalize business identity using multiple signals.
+Normalize domains and email addresses.
+Prevent duplicate outreach.
+Maintain suppression records.
+Honor opt-outs.
+Never invent contact details.
+Do not infer private email addresses.
+Use public business contact information appropriately and lawfully.
+Do not send deceptive or misleading messages.
+Do not bypass security or anti-bot mechanisms.
+30. Error Handling and Recovery
+Persist meaningful job state.
+Retry transient failures with bounded backoff.
+Do not retry permanent failures indefinitely.
+Recover queued jobs after restart.
+Avoid duplicate emails after uncertain send outcomes using provider IDs/idempotency where available.
+Record AI generation failures and allow regeneration.
+Separate browser failures, AI failures, email failures, and qualification failures.
+Show user-friendly errors.
+Keep detailed developer logs.
+31. OpenCode Acceptance Requirements
+OpenCode is installed and executable in the actual runtime environment.
+Nexora has a dedicated backend OpenCode adapter/service.
+Provider/model discovery comes from OpenCode rather than a hard-coded catalog.
+The user can select an exposed provider/model.
+The backend persists the selected configuration safely.
+AI workers use the central AI runtime.
+OpenCode errors are handled cleanly.
+Changing provider/model changes subsequent AI execution without rebuilding Nexora.
+Provider credentials are not exposed in frontend code.
+Integration tests cover the OpenCode adapter and selected-provider/model execution.
+32. End-to-End Test: Website Designer
+Create a Nexora account with full name, unique username, security question, and answer.
+Verify duplicate username is rejected.
+Log in.
+Connect a test/authorized mailbox.
+Create a website design/redesign mission.
+Target restaurants.
+Target USA.
+Set website opportunity criteria.
+Set the free-first redesign offer.
+Configure scouting windows.
+Activate the mission.
+Verify the scheduler starts a real job during the configured window.
+Verify discovery obtains legitimate business candidates.
+Verify a website candidate is investigated.
+Verify analysis records concrete observations.
+Verify a no-website candidate can be investigated.
+Verify qualification.
+Verify individualized message generation.
+Verify sending through the connected mailbox in Autopilot mode.
+Verify sent message is stored.
+Verify a test reply is detected.
+Verify immediate notification.
+Verify automated follow-up stops after reply.
+Verify a no-reply lead becomes eligible for follow-up after the configured delay.
+Verify follow-up limits and suppression.
+Pause the mission and verify new jobs stop.
+Resume and verify scheduling continues.
+Restart the backend and verify recoverable jobs resume.
+33. Test Changing the Service
+Change a mission from website redesign to email marketing. Verify the scouting and qualification behavior changes instead of continuing to apply website-specific rules.
+34. Test Changing Geography
+Test USA only, then USA + Germany + Spain + Italy. Verify geographic filtering and country metadata on discovered leads.
+35. Test Changing Schedule
+Configure multiple days and time windows. Verify the scheduler honors the configured timezone and starts automatically without a manual daily command.
+36. UX Requirements
+Responsive on phone, tablet, and desktop.
+Clear Running, Paused, Scheduled, Waiting, Failed, Completed states.
+Visible autonomous activity.
+Useful progress/activity information.
+Obvious Pause/Stop controls.
+Technical logs are secondary, not the primary UX.
+Detailed activity view for advanced users.
+37. Suggested Navigation
+Dashboard
+Missions
+Leads
+Conversations
+Email
+Activity
+Notifications
+Settings
+38. What Cline Must NOT Do
+Do not build only a frontend mockup.
+Do not simulate email sending.
+Do not hard-code provider/model lists when OpenCode is the source.
+Do not make AI runtime frontend-only.
+Do not require daily manual Start.
+Do not hard-code restaurants as the only niche.
+Do not hard-code USA as the only country.
+Do not hard-code one schedule.
+Do not use one generic outreach template.
+Do not promise guaranteed inbox placement.
+Do not invent contacts.
+Do not bypass CAPTCHAs, access controls, or anti-bot systems.
+Do not send indefinitely without limits.
+Do not continue follow-ups after a reply or opt-out.
+Do not expose API keys/secrets in frontend code.
+Do not call a feature complete because a button works visually; verify actual backend behavior.
+39. Implementation Order
+Inspect the existing repository and architecture before modifying code.
+Establish database/schema and backend foundations.
+Implement secure account creation/login.
+Install and integrate OpenCode through a central AI runtime.
+Implement provider/model discovery and selection.
+Implement email connection abstraction and authorization flow.
+Implement missions and configuration.
+Implement scheduler, queues, worker lifecycle, persistence, and recovery.
+Implement discovery/research layer.
+Implement website/online-presence analysis.
+Implement qualification.
+Implement personalized outreach generation.
+Implement sending and deliverability safeguards.
+Implement mailbox monitoring and reply detection.
+Implement notifications.
+Implement configurable follow-ups.
+Implement dashboard, leads, conversations, and activity UI.
+Run unit, integration, type-check, lint, build, and end-to-end tests.
+Harden failure/recovery/security behavior before declaring completion.
+40. Definition of Done
+Nexora Outreach is complete only when a real user can create an account, connect a mailbox, create a natural-language scouting mission, select service/targets/countries/schedule, activate it, and have the backend autonomously discover and investigate prospects, qualify them, generate individualized outreach, send it, monitor replies, notify the user, and perform configured follow-ups. The system must recover from restart/failure, prevent duplicate or suppressed outreach, and use OpenCode as the central provider/model runtime.
+41. Final Instruction to Cline
+Treat this document as the product vision and implementation contract. First inspect the existing repository and architecture. Reuse sound existing components where appropriate. Then implement the real working system in dependency order. Do not stop at a plan, UI prototype, fake integration, or simulated workflow.
+Where an external service requires credentials or user authorization, build the real integration boundary and setup flow. Where a capability depends on an external provider, do not invent unsupported behavior. Where OpenCode's exact installed commands/configuration differ from assumptions, inspect the actual installed runtime and implement against the real interface.
+Before declaring completion, run relevant tests and verify the real autonomous scheduler, worker recovery, OpenCode execution, mailbox connection, message lifecycle, reply detection, follow-up lifecycle, suppression, and pause controls. The final product must be Nexora Outreach: an autonomous prospecting and outreach platform, not merely a demonstration.

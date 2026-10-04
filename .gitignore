@@ -1,0 +1,20 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Local runtime data: SQLite database, WAL files, derived dev encryption key.
+# Never commit these - they hold the user's real data and secrets.
+.data/
+data/
+
+# Local environment / secrets. `.env.example` IS committed as the template.
+.env
+.env.*
+!.env.example
+
+# Generated evidence and logs from local verification runs
+evidence/*.tmp
+*.log
+
+# Scratch / working artefacts from ad-hoc verification runs (leading underscore)
+_*

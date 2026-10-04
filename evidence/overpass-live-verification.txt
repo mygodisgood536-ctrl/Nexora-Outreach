@@ -1,0 +1,12 @@
+area by name admin: status=200 elements=3
+    La Palapa | website=- | node/358532482
+    Pappasitos | website=- | node/359344991
+    Chinatown | website=- | node/432202995
+area by name no boundary: status=200 elements=3
+    La Palapa | website=- | node/358532482
+    Pappasitos | website=- | node/359344991
+    Chinatown | website=- | node/432202995
+area berlin: status=200 elements=3
+    Eiscafe Eisberg | website=http://www.eis-berg.de/ | node/30012754
+    Coffee Star | website=https://www.coffeestar.net | node/35528080
+    Starbucks | website=- | node/66917199

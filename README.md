@@ -181,7 +181,8 @@ locally — SQLite and the UI work out of the box. For production:
 
 The project is deploy-ready: `vercel.json` sets `public/` as the static output,
 routes `/api/*` to the `api/index.js` serverless function, rewrites unknown
-paths to the SPA shell, and registers a 5-minute Cron against `/api/cron/tick`.
+paths to the SPA shell, and registers a daily Cron against `/api/cron/tick`
+(Vercel Hobby only permits once-per-day schedules — see the note below).
 
 1. Create a Neon database and set `DATABASE_URL` on the Vercel project.
 2. Set `CRON_SECRET`, `TOKEN_ENCRYPTION_KEY` and `PUBLIC_BASE_URL`.

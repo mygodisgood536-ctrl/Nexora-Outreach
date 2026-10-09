@@ -119,7 +119,8 @@ Additional evidence:
 ## F. Deployment and operations
 
 * **Vercel:** `public/` as static output; `/api/*` → `api/index.js`; unknown
-  paths → SPA shell; 5-minute Cron on `/api/cron/tick`.
+  paths → SPA shell; daily Cron on `/api/cron/tick` (Vercel Hobby allows only
+  once-per-day schedules; shorter intervals require a paid plan).
 * **Database:** set `DATABASE_URL`; first request migrates a fresh Neon branch.
 * **Secrets:** `TOKEN_ENCRYPTION_KEY`, `CRON_SECRET`, `WEBHOOK_SECRET`,
   `PUBLIC_BASE_URL`, optional `OPENCODE_BASE_URL`/`OPENCODE_API_KEY`.

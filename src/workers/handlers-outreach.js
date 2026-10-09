@@ -1,6 +1,5 @@
 import { STAGE } from './queue.js';
 import { err } from '../core/errors.js';
-import { normalizeEmail } from '../core/normalize.js';
 import { sqliteUtc } from '../core/time.js';
 
 /**
@@ -20,15 +19,15 @@ export const sendKey = (missionId, leadId, kind, seq = 0) =>
 export async function outreachHandler(ctx) {
   const { services, payload, job, mission } = ctx;
   const { leads, conversations, ai, queue, emailStore } = services;
-  const lead = leads.get(payload.leadId);
+  const lead = await leads.get(payload.leadId);
   if (!lead) throw err.notFound('Lead');
 
-  const connection = emailStore.activeFor(job.user_id);
+  const connection = await emailStore.activeFor(job.user_id);
   if (!connection) {
     throw err.email('MAILBOX_NOT_CONNECTED', 'Connect an authorized mailbox before generating outreach.');
   }
 
-  const evidence = leads.evidenceFor(lead.id);
+  const evidence = await leads.evidenceFor(lead.id);
   const draft = await ai.writeOutreach(job.user_id, {
     lead: evidence.lead,
     analysis: { website: evidence.website, presence: evidence.presence },
@@ -43,8 +42,8 @@ export async function outreachHandler(ctx) {
     followUpNumber: 0,
   });
 
-  const conversation = conversations.ensure(lead.id, mission.id, job.user_id);
-  const { message, created } = conversations.createMessage({
+  const conversation = await conversations.ensure(lead.id, mission.id, job.user_id);
+  const { message, created } = await conversations.createMessage({
     conversationId: conversation.id,
     leadId: lead.id,
     missionId: mission.id,
@@ -58,12 +57,12 @@ export async function outreachHandler(ctx) {
 
   // §27 Scout Only: research and qualify, never send.
   if (mission.sending_mode === 'scout_only') {
-    leads.setStatus(lead.id, 'message_generated');
+    await leads.setStatus(lead.id, 'message_generated');
     return { leadId: lead.id, messageId: message.id, sent: false, mode: 'scout_only' };
   }
 
-  leads.setStatus(lead.id, 'awaiting_approval');
-  queue.enqueue({
+  await leads.setStatus(lead.id, 'awaiting_approval');
+  await queue.enqueue({
     userId: job.user_id, missionId: mission.id,
     stage: STAGE.EMAIL, payload: { leadId: lead.id, messageId: message.id },
     idempotencyKey: `email:${mission.id}:${lead.id}:initial`,
@@ -76,23 +75,23 @@ export async function emailHandler(ctx) {
   const { services, payload, job, mission } = ctx;
   const { leads, conversations, notifications, email } = services;
 
-  const message = conversations.message(payload.messageId);
+  const message = await conversations.message(payload.messageId);
   if (!message) throw err.notFound('Message');
   if (message.send_status === 'sent') return { messageId: message.id, alreadySent: true };
 
-  const lead = leads.get(message.lead_id);
+  const lead = await leads.get(message.lead_id);
   if (!lead) throw err.notFound('Lead');
 
-  const conversation = conversations.getFor(lead.id, mission.id);
+  const conversation = await conversations.getFor(lead.id, mission.id);
 
   // Suppression is checked FIRST: an opted-out, bounced or complained-about
   // recipient is never presented for approval and is never retried.
   try {
-    conversations.assertNotSuppressed(job.user_id, lead, conversation?.id);
+    await conversations.assertNotSuppressed(job.user_id, lead, conversation?.id);
   } catch (e) {
     if (e.code === 'SUPPRESSED') {
-      leads.setStatus(lead.id, 'suppressed');
-      if (conversation) conversations.setStatus(conversation.id, 'suppressed');
+      await leads.setStatus(lead.id, 'suppressed');
+      if (conversation) await conversations.setStatus(conversation.id, 'suppressed');
     }
     throw e;
   }
@@ -105,31 +104,33 @@ export async function emailHandler(ctx) {
   }
 
   // Throws when there is no contact route or the daily limit is reached.
-  const to = conversations.assertSendable(job.user_id, mission.id, lead, conversation?.id);
+  const to = await conversations.assertSendable(job.user_id, mission.id, lead, conversation?.id);
   const idempotencyKey = message.idempotency_key || sendKey(mission.id, lead.id, message.kind);
 
   try {
     const result = await email.send(job.user_id, {
       to, subject: message.subject, text: message.body_text, idempotencyKey,
     });
-    conversations.markSent(message.id, {
+    await conversations.markSent(message.id, {
       provider: result.provider, providerMessageId: result.providerMessageId, idempotencyKey,
     });
-    conversations.setStatus(conversation.id, 'sent');
-    conversations.recordSend(job.user_id, mission.id, mission.timezone);
-    leads.markContacted(lead.id);
-    leads.setStatus(lead.id, 'sent');
-    ctx.db.run(
-      "UPDATE conversations SET last_outbound_at = datetime('now'), thread_key = COALESCE(?, thread_key) WHERE id = ?",
-      result.threadKey || null, conversation.id
-    );
+    if (conversation) await conversations.setStatus(conversation.id, 'sent');
+    await conversations.recordSend(job.user_id, mission.id, mission.timezone);
+    await leads.markContacted(lead.id);
+    await leads.setStatus(lead.id, 'sent');
+    if (conversation) {
+      await ctx.db.run(
+        "UPDATE conversations SET last_outbound_at = datetime('now'), thread_key = COALESCE(?, thread_key) WHERE id = ?",
+        result.threadKey || null, conversation.id
+      );
+    }
 
     // §19: schedule a follow-up only within the configured limits.
-    const scheduled = conversations.scheduleFollowUp({
-      conversationId: conversation.id, leadId: lead.id, missionId: mission.id, mission,
+    const scheduled = await conversations.scheduleFollowUp({
+      conversationId: conversation?.id, leadId: lead.id, missionId: mission.id, mission,
     });
     if (scheduled?.created) {
-      notifications.create(job.user_id, {
+      await notifications.create(job.user_id, {
         kind: 'follow_up_due', severity: 'info',
         title: `Follow-up scheduled for ${lead.business_name}`,
         body: `Due in ${mission.follow_up_delay_days} day(s).`,
@@ -138,9 +139,9 @@ export async function emailHandler(ctx) {
     }
     return { messageId: message.id, sent: true, provider: result.provider, to };
   } catch (e) {
-    conversations.markFailed(message.id, e.message);
+    await conversations.markFailed(message.id, e.message);
     if (e.code === 'MAILBOX_AUTH_EXPIRED') {
-      notifications.create(job.user_id, {
+      await notifications.create(job.user_id, {
         kind: 'mailbox_expired', severity: 'critical',
         title: 'Mailbox authorization expired',
         body: 'Reconnect your mailbox to resume sending outreach.',
@@ -148,8 +149,8 @@ export async function emailHandler(ctx) {
       });
     } else if (e.code === 'SUPPRESSED') {
       // Never retry a suppressed recipient.
-      leads.setStatus(lead.id, 'suppressed');
-      conversations.setStatus(conversation.id, 'suppressed');
+      await leads.setStatus(lead.id, 'suppressed');
+      if (conversation) await conversations.setStatus(conversation.id, 'suppressed');
     }
     throw e;
   }

@@ -13,7 +13,7 @@ import { makeFakeAI, makeFakeEmail } from './harness.js';
  * service underneath are the real implementations.
  */
 export async function startTestServer(options = {}) {
-  const parts = createTestSystem(options);
+  const parts = await createTestSystem(options);
   const { db, system, ai, email, discovery } = parts;
   const server = createServer(system);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -24,7 +24,7 @@ export async function startTestServer(options = {}) {
     base: `http://127.0.0.1:${port}`,
     async close() {
       await new Promise((resolve) => server.close(resolve));
-      db.close();
+      await db.close();
     },
   };
 }
@@ -36,10 +36,13 @@ export async function startTestServer(options = {}) {
  * `src/app.js` entry point, which creates the one and only HTTP listener.
  * Opening two listeners on one system would keep the test process alive.
  */
-export function createTestSystem(options = {}) {
-  const db = createTestDb();
+export async function createTestSystem(options = {}) {
+  const db = await createTestDb();
+  // The async database layer applies the schema explicitly; every test system
+  // must start against a migrated database (migrate() is idempotent).
+  await db.migrate();
   const ai = makeFakeAI(options.aiOverrides || {});
-  const email = makeFakeEmail();
+  const email = makeFakeEmail(db);
   Object.assign(email.state, options.emailState || {});
 
   const research = {
@@ -81,12 +84,12 @@ export function createTestSystem(options = {}) {
 }
 
 /**
- * Boot the REAL application entry point (src/app.js) — API, scheduler and
- * worker together — against an in-memory database, so `npm start`'s real
+ * Boot the REAL application entry point (src/app.js) â€” API, scheduler and
+ * worker together â€” against an in-memory database, so `npm start`'s real
  * startup and shutdown paths are covered rather than assumed.
  */
 export async function startTestApp() {
-  const parts = createTestSystem();
+  const parts = await createTestSystem();
   const app = await start({ system: parts.system, cfg: { port: 0 } });
   // Capture the address now: once the app stops, `server.address()` is null.
   const { port } = app.server.address();
@@ -100,12 +103,13 @@ export async function startTestApp() {
 }
 
 /** Attach an authorized mailbox so the pipeline can reach the email stage. */
-export function connectMailbox(db, userId, provider = 'test') {
-  return db.run(
+export async function connectMailbox(db, userId, provider = 'google') {
+  const { lastInsertRowid } = await db.run(
     `INSERT INTO email_connections(user_id, provider, account_email, access_token_enc, status, updated_at)
      VALUES(?,?,?, 'v1:a:b:c', 'connected', datetime('now'))`,
     userId, provider, `${provider}@example.com`
-  ).lastInsertRowid;
+  );
+  return lastInsertRowid;
 }
 
 /** Minimal cookie-jar client so session behaviour is exercised for real. */

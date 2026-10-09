@@ -44,6 +44,11 @@ function formatRecoveryCode() {
 const LOCKOUT_SCHEDULE = [0, 0, 0, 1, 5, 15, 60, 240];
 const MAX_FAILURES = LOCKOUT_SCHEDULE.length - 1;
 
+/**
+ * Every method here is `async` because the database layer is asynchronous:
+ * PostgreSQL (production) cannot be driven synchronously, so the SQLite test
+ * driver returns Promises too and a forgotten `await` fails loudly.
+ */
 export class AuthService {
   constructor({ db, sessionTtlHours = 72 } = {}) {
     this.db = db;
@@ -59,12 +64,12 @@ export class AuthService {
   }
 
   /** Live availability check for the sign-up form (spec 5.1). */
-  isUsernameAvailable(username) {
+  async isUsernameAvailable(username) {
     const problem = AuthService.validateUsername(username);
     if (problem) return { available: false, reason: problem };
-    const existing = this.db.get(
+    const existing = await this.db.get(
       'SELECT id FROM users WHERE username_lower = ? AND deleted_at IS NULL',
-      String(username).toLowerCase()
+      String(username).toLowerCase(),
     );
     return existing
       ? { available: false, reason: 'That username is already taken.' }
@@ -76,38 +81,42 @@ export class AuthService {
    * hash (spec 5.2). A recovery secret is derived so recovery never depends
    * solely on a guessable security question (spec 5.3).
    */
-  signup({ fullName, username, securityQuestion, securityAnswer, timezone = 'UTC', ip = null }) {
+  async signup({ fullName, username, securityQuestion, securityAnswer, timezone = 'UTC', ip = null }) {
     if (!fullName || String(fullName).trim().length < 2) throw err.validation('Full name is required.');
     const problem = AuthService.validateUsername(username);
     if (problem) throw err.validation(problem);
     if (!securityQuestion || !securityAnswer) throw err.validation('A security question and answer are required.');
     if (String(securityAnswer).trim().length < 3) throw err.validation('Security answer must be at least 3 characters.');
 
-    const available = this.isUsernameAvailable(username);
+    // Server-side uniqueness is enforced twice: this pre-check for a friendly
+    // message, and the UNIQUE index on username_lower for the race.
+    const available = await this.isUsernameAvailable(username);
     if (!available.available) throw err.conflict(available.reason, 'DUPLICATE_USERNAME');
 
     const recovery = hashSecret(`${username.toLowerCase()}:${securityAnswer.toLowerCase()}`);
-    const userId = this.db.tx(() => {
-      const r = this.db.run(
+    const userId = await this.db.tx(async () => {
+      const r = await this.db.run(
         `INSERT INTO users(full_name, username, username_lower, security_question,
                            recovery_code_hash, timezone, created_ms)
          VALUES(?,?,?,?,?,?,?)`,
         String(fullName).trim(), username, username.toLowerCase(), securityQuestion,
-        recovery.hash_hex, timezone, Date.now()
+        recovery.hash_hex, timezone, Date.now(),
       );
       const id = r.lastInsertRowid;
       const cred = hashSecret(securityAnswer);
-      this.db.run(
-        `INSERT INTO security_credentials(user_id, algo, salt_hex, hash_hex, params) VALUES(?,?,?,?,?)`,
-        id, cred.algo, cred.salt_hex, cred.hash_hex, cred.params
+      await this.db.run(
+        'INSERT INTO security_credentials(user_id, algo, salt_hex, hash_hex, params) VALUES(?,?,?,?,?)',
+        id, cred.algo, cred.salt_hex, cred.hash_hex, cred.params,
       );
       return id;
     });
 
-    recordAudit(this.db, { userId, actor: 'user', action: 'account.created', entityType: 'user', entityId: userId, detail: { username }, ip });
+    await recordAudit(this.db, {
+      userId, actor: 'user', action: 'account.created', entityType: 'user', entityId: userId, detail: { username }, ip,
+    });
     // Recovery is issued at creation and shown exactly once — it is never
     // emailed or re-displayable, and never stored in the clear.
-    const recoveryCode = this.issueRecoveryCode(userId);
+    const recoveryCode = await this.issueRecoveryCode(userId);
     log.info(`account created: ${username}`);
     return { userId, username, recoveryCode };
   }
@@ -118,12 +127,12 @@ export class AuthService {
    * Returns the plaintext code for display; only a scrypt hash is stored, with
    * a fresh salt per code so codes cannot be compared with each other.
    */
-  issueRecoveryCode(userId) {
+  async issueRecoveryCode(userId) {
     const code = formatRecoveryCode();
     const cred = hashSecret(code);
-    this.db.run(
-      `INSERT INTO recovery_codes(user_id, code_hash, algo, salt_hex, params) VALUES(?,?,?,?,?)`,
-      userId, cred.hash_hex, cred.algo, cred.salt_hex, cred.params
+    await this.db.run(
+      'INSERT INTO recovery_codes(user_id, code_hash, algo, salt_hex, params) VALUES(?,?,?,?,?)',
+      userId, cred.hash_hex, cred.algo, cred.salt_hex, cred.params,
     );
     return code;
   }
@@ -135,62 +144,69 @@ export class AuthService {
    * had a session loses access, and returns a new session for the caller.
    * The redeemed code is marked used, so a captured code cannot be reused.
    */
-  recover({ username, recoveryCode, newSecurityAnswer, newSecurityQuestion = null, ip = null, userAgent = null }) {
+  async recover({ username, recoveryCode, newSecurityAnswer, newSecurityQuestion = null, ip = null, userAgent = null }) {
     const key = String(username || '').toLowerCase();
     if (!newSecurityAnswer || String(newSecurityAnswer).trim().length < 3) {
       throw err.validation('The new security answer must be at least 3 characters.');
     }
     if (!recoveryCode) throw err.validation('A recovery code is required.');
 
-    const user = this.db.get('SELECT * FROM users WHERE username_lower = ? AND deleted_at IS NULL', key);
+    const user = await this.db.get(
+      'SELECT * FROM users WHERE username_lower = ? AND deleted_at IS NULL',
+      key,
+    );
     // The same message for an unknown user, a wrong code or an empty code, so
     // this endpoint cannot be used to discover which usernames exist.
     const reject = () => err.unauthorized('That recovery code is not valid.');
     if (!user) throw reject();
 
-    const candidates = this.db.all(
+    const candidates = await this.db.all(
       'SELECT * FROM recovery_codes WHERE user_id = ? AND used_at IS NULL ORDER BY id DESC',
-      user.id
+      user.id,
     );
     const match = candidates.find((row) => verifySecret(recoveryCode, {
       salt_hex: row.salt_hex, hash_hex: row.code_hash, params: row.params,
     }));
     if (!match) throw reject();
 
-    this.db.tx(() => {
+    await this.db.tx(async () => {
       // Burn every code: recovery is a one-time takeover.
-      this.db.run(
+      await this.db.run(
         "UPDATE recovery_codes SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL",
-        user.id
+        user.id,
       );
       const cred = hashSecret(newSecurityAnswer);
-      this.db.run(
+      await this.db.run(
         `UPDATE security_credentials
             SET algo = ?, salt_hex = ?, hash_hex = ?, params = ?, updated_at = datetime('now')
           WHERE user_id = ?`,
-        cred.algo, cred.salt_hex, cred.hash_hex, cred.params, user.id
+        cred.algo, cred.salt_hex, cred.hash_hex, cred.params, user.id,
       );
       if (newSecurityQuestion) {
-        this.db.run('UPDATE users SET security_question = ? WHERE id = ?', newSecurityQuestion, user.id);
+        await this.db.run('UPDATE users SET security_question = ? WHERE id = ?', newSecurityQuestion, user.id);
       }
       // A stolen session must not survive an account takeover.
-      this.db.run(
-        'UPDATE sessions SET revoked_at = datetime(\'now\') WHERE user_id = ? AND revoked_at IS NULL',
-        user.id
+      await this.db.run(
+        "UPDATE sessions SET revoked_at = datetime('now') WHERE user_id = ? AND revoked_at IS NULL",
+        user.id,
       );
-      this.db.run('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?', user.id);
+      await this.db.run('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?', user.id);
     });
 
-    recordAudit(this.db, { userId: user.id, actor: 'user', action: 'auth.recovered', entityId: user.id, ip });
+    await recordAudit(this.db, { userId: user.id, actor: 'user', action: 'auth.recovered', entityId: user.id, ip });
     log.info(`account recovered: ${user.username}`);
-    const session = this.sessions.create(user.id, { ip, userAgent });
-    return { token: session.token, user: this.publicUser(user.id), expiresAt: session.expiresAt };
+    const session = await this.sessions.create(user.id, { ip, userAgent });
+    const publicUser = await this.publicUser(user.id);
+    return { token: session.token, user: publicUser, expiresAt: session.expiresAt };
   }
 
   /** Login with username + security answer (spec 5.2), progressive lockout (spec 5.3). */
-  login({ username, securityAnswer, ip = null, userAgent = null }) {
+  async login({ username, securityAnswer, ip = null, userAgent = null }) {
     const key = String(username || '').toLowerCase();
-    const user = this.db.get('SELECT * FROM users WHERE username_lower = ? AND deleted_at IS NULL', key);
+    const user = await this.db.get(
+      'SELECT * FROM users WHERE username_lower = ? AND deleted_at IS NULL',
+      key,
+    );
 
     if (user?.locked_until) {
       const until = SessionStore.toMillis(user.locked_until);
@@ -199,67 +215,133 @@ export class AuthService {
       }
     }
     // Limit unknown usernames too, so the endpoint cannot be enumerated.
-    if (!user && recentFailures(this.db, key) >= MAX_FAILURES) {
+    if (!user && (await recentFailures(this.db, key)) >= MAX_FAILURES) {
       throw err.locked('Too many failed attempts. Try again later.');
     }
 
-    const cred = user ? this.db.get('SELECT * FROM security_credentials WHERE user_id = ?', user.id) : null;
+    const cred = user ? await this.db.get('SELECT * FROM security_credentials WHERE user_id = ?', user.id) : null;
     const ok = Boolean(user && cred && verifySecret(securityAnswer, cred));
-    registerAttempt(this.db, key, ok);
+    await registerAttempt(this.db, key, ok);
 
     if (!ok) {
       if (user) {
-        const failures = recentFailures(this.db, key);
+        const failures = await recentFailures(this.db, key);
         const lockMinutes = lockMinutesFor(failures, LOCKOUT_SCHEDULE);
-        this.db.run(
+        await this.db.run(
           'UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?',
           (user.failed_attempts || 0) + 1,
           lockMinutes > 0 ? sqliteUtc(new Date(Date.now() + lockMinutes * 60000)) : null,
-          user.id
+          user.id,
         );
-        recordAudit(this.db, { userId: user.id, actor: 'user', action: 'auth.login_failed', entityId: user.id, detail: { failures }, ip });
+        await recordAudit(this.db, { userId: user.id, actor: 'user', action: 'auth.login_failed', entityId: user.id, detail: { failures }, ip });
         if (lockMinutes > 0) throw err.locked(`Too many failed attempts. Try again in ${lockMinutes} minute(s).`);
       }
       throw err.unauthorized('Incorrect username or security answer.');
     }
 
-    this.db.run('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?', user.id);
-    const session = this.sessions.create(user.id, { ip, userAgent });
-    recordAudit(this.db, { userId: user.id, actor: 'user', action: 'auth.login', entityId: user.id, ip });
-    return { token: session.token, user: this.publicUser(user.id), expiresAt: session.expiresAt };
+    await this.db.run('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?', user.id);
+    const session = await this.sessions.create(user.id, { ip, userAgent });
+    await recordAudit(this.db, { userId: user.id, actor: 'user', action: 'auth.login', entityId: user.id, ip });
+    const publicUser = await this.publicUser(user.id);
+    return { token: session.token, user: publicUser, expiresAt: session.expiresAt };
   }
-/** Resolve a bearer token to a user, honouring expiry and revocation. */
-  resolveSession(token) {
-    const row = this.sessions.findValid(token);
+
+  /** Resolve a bearer token to a user, honouring expiry and revocation. */
+  async resolveSession(token) {
+    const row = await this.sessions.findValid(token);
     if (!row) return null;
-    this.sessions.touch(row.id);
+    await this.sessions.touch(row.id);
     return this.publicUser(row.user_id);
   }
 
-  logout(token) { return this.sessions.revoke(token); }
-  revokeAllSessions(userId) { return this.sessions.revokeAll(userId); }
+  async logout(token) { return this.sessions.revoke(token); }
+  async revokeAllSessions(userId) { return this.sessions.revokeAll(userId); }
 
-  publicUser(userId) {
-    const u = this.db.get('SELECT * FROM users WHERE id = ?', userId);
+  /** Active sessions for the account/security screen (spec §5.3). */
+  async listSessions(userId, currentSessionId = null) {
+    const rows = await this.sessions.listActive(userId);
+    return rows.map((r) => ({
+      id: r.id,
+      current: currentSessionId != null && String(r.id) === String(currentSessionId),
+      createdAt: r.created_at,
+      lastSeenAt: r.last_seen_at,
+      expiresAt: r.expires_at,
+      userAgent: r.user_agent,
+      ip: r.ip,
+    }));
+  }
+
+  /** Revoke one session by id, scoped to the owner. */
+  async revokeSession(userId, sessionId) {
+    const row = await this.db.get('SELECT id, user_id FROM sessions WHERE id = ?', sessionId);
+    if (!row || row.user_id !== userId) throw err.notFound('Session not found.');
+    await this.sessions.revokeById(sessionId);
+    await recordAudit(this.db, { userId, actor: 'user', action: 'auth.session_revoked', entityId: sessionId });
+    return { revoked: true };
+  }
+
+  async publicUser(userId) {
+    const u = await this.db.get('SELECT * FROM users WHERE id = ?', userId);
     if (!u) return null;
     return {
       id: u.id, fullName: u.full_name, username: u.username,
       securityQuestion: u.security_question, timezone: u.timezone,
       automationPaused: Boolean(u.automation_paused),
+      createdAt: u.created_at,
     };
   }
 
-  updateProfile(userId, { fullName, timezone }) {
-    this.db.run(
+  async updateProfile(userId, { fullName, timezone }) {
+    await this.db.run(
       'UPDATE users SET full_name = COALESCE(?, full_name), timezone = COALESCE(?, timezone) WHERE id = ?',
-      fullName ?? null, timezone ?? null, userId
+      fullName ?? null, timezone ?? null, userId,
     );
     return this.publicUser(userId);
   }
 
+  /**
+   * Change the security question/answer while signed in (spec §5.3).
+   * The current answer must be re-provided: a stolen session alone must not
+   * be enough to silently take over account recovery.
+   */
+  async changeSecurityCredential(userId, { currentAnswer, newSecurityAnswer, newSecurityQuestion, ip = null }) {
+    if (!currentAnswer) throw err.validation('Your current security answer is required.');
+    if (!newSecurityAnswer || String(newSecurityAnswer).trim().length < 3) {
+      throw err.validation('The new security answer must be at least 3 characters.');
+    }
+    if (!newSecurityQuestion || !String(newSecurityQuestion).trim()) {
+      throw err.validation('A security question is required.');
+    }
+
+    const cred = await this.db.get('SELECT * FROM security_credentials WHERE user_id = ?', userId);
+    if (!cred || !verifySecret(currentAnswer, cred)) {
+      throw err.unauthorized('Incorrect username or security answer.');
+    }
+
+    const next = hashSecret(newSecurityAnswer);
+    await this.db.tx(async () => {
+      await this.db.run(
+        `UPDATE security_credentials
+            SET algo = ?, salt_hex = ?, hash_hex = ?, params = ?, updated_at = datetime('now')
+          WHERE user_id = ?`,
+        next.algo, next.salt_hex, next.hash_hex, next.params, userId,
+      );
+      await this.db.run('UPDATE users SET security_question = ? WHERE id = ?', newSecurityQuestion, userId);
+      // Rotate every recovery code: the old one was derived from the old answer.
+      await this.db.run('DELETE FROM recovery_codes WHERE user_id = ? AND used_at IS NULL', userId);
+    });
+
+    const recoveryCode = await this.issueRecoveryCode(userId);
+    await recordAudit(this.db, {
+      userId, actor: 'user', action: 'auth.security_credential_changed', entityId: userId, ip,
+    });
+    log.info('security credential changed');
+    return { recoveryCode };
+  }
+
   /** "Pause All Automation" (spec 26). */
-  setAutomationPaused(userId, paused) {
-    this.db.run('UPDATE users SET automation_paused = ? WHERE id = ?', paused ? 1 : 0, userId);
+  async setAutomationPaused(userId, paused) {
+    await this.db.run('UPDATE users SET automation_paused = ? WHERE id = ?', paused ? 1 : 0, userId);
     return this.publicUser(userId);
   }
 }

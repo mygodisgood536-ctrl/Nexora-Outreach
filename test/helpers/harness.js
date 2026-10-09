@@ -9,8 +9,8 @@ import { STAGE } from '../../src/workers/queue.js';
  * Harness for the worker lifecycle tests.
  *
  * The pipeline, queue, state machine, suppression, idempotency, limits and
- * follow-up logic are all REAL. Only the outbound boundaries are replaced — AI
- * transport, email transport and outbound HTTP/discovery — so tests are
+ * follow-up logic are all REAL. Only the outbound boundaries are replaced â€” AI
+ * transport, email transport and outbound HTTP/discovery â€” so tests are
  * deterministic and offline.
  *
  * The AI stub sits BELOW `AITasks`, so every response still passes through the
@@ -102,7 +102,7 @@ export function makeFakeAI(overrides = {}) {
       const found = catalog.find((m) => m.id === model);
       if (!found) {
         // A model the installed runtime does not offer is a user input error,
-        // not a provider outage — the spec calls for a clear rejection.
+        // not a provider outage â€” the spec calls for a clear rejection.
         throw err.validation(`"${model}" is not offered by the installed OpenCode runtime.`);
       }
       base.selected = found.id;
@@ -116,7 +116,7 @@ export function makeFakeAI(overrides = {}) {
 }
 
 /** Records sends; mirrors a provider rejecting a duplicate idempotency key. */
-export function makeFakeEmail() {
+export function makeFakeEmail(db = null) {
   const sent = [];
   const state = { failNext: null, replies: [] };
   const email = {
@@ -128,7 +128,7 @@ export function makeFakeEmail() {
         state.failNext = null;
         // Tests choose the taxonomy; defaults mirror the real send failure.
         // `retryable` is a getter derived from the code, so it must not be
-        // assigned — the code alone decides retry vs permanent.
+        // assigned â€” the code alone decides retry vs permanent.
         const error = new AppError(e.code || 'SEND_FAILED', e.message || 'send failed', {
           kind: e.kind || ERROR_KIND.EMAIL,
           status: e.status || 502,
@@ -147,11 +147,12 @@ export function makeFakeEmail() {
       if (!['google', 'microsoft'].includes(providerId)) {
         throw err.email('PROVIDER_UNSUPPORTED', `No email provider named "${providerId}".`);
       }
+      if (db) await db.run('DELETE FROM email_connections WHERE user_id = ? AND provider = ?', userId, providerId);
       return db_connections.delete(`${userId}:${providerId}`);
     },
     /** Mirrors the real catalogue: every registered provider, never secrets. */
-    statusFor(userId) {
-      return ['google', 'microsoft'].map((id) => {
+    async statusFor(userId) {
+      const catalogue = ['google', 'microsoft'].map((id) => {
         const row = db_connections.get(`${userId}:${id}`) || null;
         return {
           id,
@@ -163,19 +164,35 @@ export function makeFakeEmail() {
             : { provider: id, status: 'disconnected', accountEmail: null },
         };
       });
+      // The real service reads persisted connections; tests may attach a mailbox
+      // by writing `email_connections` directly (connectMailbox), so the fake
+      // has to see that state too or the dashboard lies about being connected.
+      if (!db) return catalogue;
+      const rows = await db.all(
+        'SELECT provider, account_email, status FROM email_connections WHERE user_id = ?', userId,
+      );
+      const persisted = new Map(rows.map((r) => [r.provider, r]));
+      return catalogue.map((meta) => {
+        const row = persisted.get(meta.id);
+        if (!row) return meta;
+        return {
+          ...meta,
+          connection: { provider: meta.id, status: row.status, accountEmail: row.account_email },
+        };
+      });
     },
   };
   const db_connections = new Map();
   const issuedStates = new Map();
   // Tests run without OAuth client credentials, so nothing is configured by
-  // default — exactly like a fresh deployment.
+  // default â€” exactly like a fresh deployment.
   const unconfigured = new Set(['google', 'microsoft']);
   email.issuedStates = issuedStates;
   email.configure = (id) => unconfigured.delete(id);
   email.connect = (userId, provider, accountEmail) => {
     db_connections.set(`${userId}:${provider}`, { accountEmail });
   };
-  // ── OAuth, so the connect/callback route pair is exercised for real ──
+  // â”€â”€ OAuth, so the connect/callback route pair is exercised for real â”€â”€
   email.beginAuth = async (userId, providerId) => {
     if (!['google', 'microsoft'].includes(providerId)) {
       throw err.email('PROVIDER_UNSUPPORTED', `No email provider named "${providerId}".`);
@@ -219,13 +236,16 @@ function throwOnUnknownOptions(options) {
   }
 }
 
-export function setup({ discoveryCandidates = null, aiOverrides = {}, emailState = {} } = {}) {
+export async function setup({ discoveryCandidates = null, aiOverrides = {}, emailState = {} } = {}) {
   // Mission configuration belongs to seedMission via `stack(db, { mission })`.
   // Failing loudly prevents tests from silently running with default settings.
   throwOnUnknownOptions(arguments[0]);
-  const db = createTestDb();
+  const db = await createTestDb();
+  // The async database layer applies the schema explicitly; the harness must
+  // hand every test a migrated database (migrate() is idempotent).
+  await db.migrate();
   const ai = makeFakeAI(aiOverrides);
-  const email = makeFakeEmail();
+  const email = makeFakeEmail(db);
   Object.assign(email.state, emailState);
 
   const research = {
@@ -265,16 +285,16 @@ export function setup({ discoveryCandidates = null, aiOverrides = {}, emailState
   return { db, system, ai, email, research, discovery };
 }
 
-export function seedUser(db, { username = 'ada', automationPaused = false } = {}) {
-  const id = db.run(
+export async function seedUser(db, { username = 'ada', automationPaused = false } = {}) {
+  const { lastInsertRowid: id } = await db.run(
     `INSERT INTO users(full_name, username, username_lower, security_question, automation_paused, created_ms)
      VALUES('Ada Lovelace', ?, ?, 'q?', ?, 0)`,
     username, username.toLowerCase(), automationPaused ? 1 : 0
-  ).lastInsertRowid;
+  );
   return db.get('SELECT * FROM users WHERE id = ?', id);
 }
 
-export function seedMission(db, userId, {
+export async function seedMission(db, userId, {
   name = 'Restaurant Website Redesign',
   sending_mode = 'autopilot',
   status = 'scheduled',
@@ -285,22 +305,22 @@ export function seedMission(db, userId, {
   maxFollowUps = 3,
   dailySendLimit = 20,
 } = {}) {
-  const id = db.run(
+  const { lastInsertRowid: id } = await db.run(
     `INSERT INTO missions(user_id, name, service, offer_summary, target_description, sending_mode,
                           timezone, follow_up_delay_days, max_follow_ups, daily_send_limit, status)
      VALUES(?,?, 'website_design', 'free-first website redesign', 'restaurants with weak websites', ?,?,?,?,?,?)`,
     userId, name, sending_mode, timezone, followUpDelayDays, maxFollowUps, dailySendLimit, status
-  ).lastInsertRowid;
-  db.run('DELETE FROM mission_windows WHERE mission_id = ?', id);
+  );
+  await db.run('DELETE FROM mission_windows WHERE mission_id = ?', id);
   for (const w of windows) {
-    db.run(
+    await db.run(
       'INSERT INTO mission_windows(mission_id, day_of_week, start_min, end_min) VALUES(?,?,?,?)',
       id, w.dayOfWeek, w.startMin, w.endMin
     );
   }
-  db.run('DELETE FROM target_locations WHERE mission_id = ?', id);
+  await db.run('DELETE FROM target_locations WHERE mission_id = ?', id);
   for (const l of locations) {
-    db.run(
+    await db.run(
       'INSERT INTO target_locations(mission_id, country, region, city, priority) VALUES(?,?,?,?,?)',
       id, l.country, l.region || null, l.city || null, l.priority || 'medium'
     );
@@ -308,12 +328,13 @@ export function seedMission(db, userId, {
   return db.get('SELECT * FROM missions WHERE id = ?', id);
 }
 
-export function connectMailbox(db, userId, provider = 'test') {
-  return db.run(
+export async function connectMailbox(db, userId, provider = 'google') {
+  const { lastInsertRowid } = await db.run(
     `INSERT INTO email_connections(user_id, provider, account_email, access_token_enc, status, updated_at)
      VALUES(?,?,?, 'v1:a:b:c', 'connected', datetime('now'))`,
     userId, provider, `${provider}@example.com`
-  ).lastInsertRowid;
+  );
+  return lastInsertRowid;
 }
 
 export { STAGE };

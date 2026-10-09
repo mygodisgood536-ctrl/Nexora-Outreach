@@ -141,7 +141,7 @@ test('api: a recovery code is issued once at signup and never stored in the clea
     assert.equal(created.status, 201);
     assert.match(created.body.recoveryCode, /^[A-Z0-9]{5}(-[A-Z0-9]{5}){3}$/);
 
-    const stored = system.db.get('SELECT * FROM recovery_codes WHERE user_id = 1');
+    const stored = await system.db.get('SELECT * FROM recovery_codes WHERE user_id = 1');
     assert.ok(stored, 'a recovery code row exists');
     assert.equal(stored.used_at, null);
     assert.ok(!stored.code_hash.includes(created.body.recoveryCode), 'only a hash is stored');

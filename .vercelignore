@@ -1,0 +1,19 @@
+# Local state and secrets
+.data/
+.env
+.env.*
+!.env.example
+
+# Scratch/debug artifacts
+_*
+*.log
+
+# Tests, fixtures and reference material
+test/
+evidence/
+spec-reference/
+scripts/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db

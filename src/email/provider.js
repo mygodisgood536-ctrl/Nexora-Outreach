@@ -92,8 +92,8 @@ export class EmailService {
     }));
   }
 
-  statusFor(userId) {
-    const rows = this.store.list(userId);
+  async statusFor(userId) {
+    const rows = await this.store.list(userId);
     const byProvider = new Map(rows.map((r) => [r.provider, r]));
     return this.catalogue().map((meta) => {
       const row = byProvider.get(meta.id);
@@ -119,14 +119,14 @@ export class EmailService {
       throw err.email('PROVIDER_NOT_CONFIGURED', `${provider.constructor.label} is not configured on this server.`);
     }
     const state = randomBytes(32).toString('base64url');
-    this.db.run(
+    await this.db.run(
       `INSERT INTO oauth_states(state_hash, user_id, provider, expires_at)
        VALUES(?,?,?,?)`,
       hashState(state), userId, providerId, nowSqliteFrom(OAUTH_STATE_TTL_SECONDS)
     );
     // Opportunistic cleanup keeps the table small; a failure here is harmless.
     try {
-      this.db.run(`DELETE FROM oauth_states WHERE expires_at < datetime('now')`);
+      await this.db.run(`DELETE FROM oauth_states WHERE expires_at < datetime('now')`);
     } catch { /* best-effort cleanup */ }
 
     const url = await provider.getAuthUrl({ state, redirectUri });
@@ -140,9 +140,9 @@ export class EmailService {
    * anything already used. Consuming is a single conditional UPDATE, so two
    * concurrent replays cannot both succeed.
    */
-  consumeState(providerId, state) {
+  async consumeState(providerId, state) {
     const hash = hashState(String(state));
-    const row = this.db.get(
+    const row = await this.db.get(
       `SELECT * FROM oauth_states
         WHERE state_hash = ? AND provider = ? AND consumed_at IS NULL AND expires_at > datetime('now')`,
       hash, providerId
@@ -150,7 +150,7 @@ export class EmailService {
     if (!row) {
       throw err.validation('This authorization link is invalid or has expired. Start again.');
     }
-    const burned = this.db.run(
+    const burned = await this.db.run(
       `UPDATE oauth_states SET consumed_at = datetime('now')
         WHERE id = ? AND consumed_at IS NULL`,
       row.id
@@ -190,27 +190,28 @@ export class EmailService {
    * which the worker turns into a user notification (spec §25).
    */
   async accessTokenFor(userId, providerId = null) {
-    const provider = providerId || this.store.activeFor(userId)?.provider;
+    const active = await this.store.activeFor(userId);
+    const provider = providerId || active?.provider;
     if (!provider) {
       throw err.email('MAILBOX_NOT_CONNECTED', 'Connect an authorized mailbox before sending outreach.');
     }
-    const { row, accessToken, refreshToken } = this.store.tokens(userId, provider);
+    const { row, accessToken, refreshToken } = await this.store.tokens(userId, provider);
     if (accessToken && !this.store.isExpired(row)) return { accessToken, provider };
 
     if (!refreshToken) {
-      this.store.markStatus(userId, provider, CONNECTION_STATUS.EXPIRED, 'Authorization expired. Reconnect your mailbox.');
+      await this.store.markStatus(userId, provider, CONNECTION_STATUS.EXPIRED, 'Authorization expired. Reconnect your mailbox.');
       throw err.email('MAILBOX_AUTH_EXPIRED', 'Mailbox authorization expired. Reconnect it to resume sending.');
     }
     try {
       const fresh = await this.get(provider).refresh(refreshToken);
-      this.store.updateTokens(userId, provider, {
+      await this.store.updateTokens(userId, provider, {
         accessToken: fresh.access_token,
         refreshToken: fresh.refresh_token ?? null,
         expiresAt: fresh.expires_in ? nowSqliteFrom(fresh.expires_in) : null,
       });
       return { accessToken: fresh.access_token, provider };
     } catch (e) {
-      this.store.markStatus(userId, provider, CONNECTION_STATUS.EXPIRED, 'Authorization could not be refreshed.');
+      await this.store.markStatus(userId, provider, CONNECTION_STATUS.EXPIRED, 'Authorization could not be refreshed.');
       throw err.email('MAILBOX_AUTH_EXPIRED', 'Mailbox authorization expired. Reconnect it to resume sending.');
     }
   }

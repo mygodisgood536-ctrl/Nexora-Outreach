@@ -11,11 +11,11 @@ import { err } from '../core/errors.js';
 export async function siteAnalysisHandler(ctx) {
   const { services, payload, job, mission } = ctx;
   const { leads, ai, queue } = services;
-  const lead = leads.get(payload.leadId);
+  const lead = await leads.get(payload.leadId);
   if (!lead) throw err.notFound('Lead');
 
-  const site = leads.websiteAnalysis(lead.id);
-  const presence = leads.presenceAnalysis(lead.id);
+  const site = await leads.websiteAnalysis(lead.id);
+  const presence = await leads.presenceAnalysis(lead.id);
 
   const leadView = {
     businessName: lead.business_name,
@@ -36,7 +36,7 @@ export async function siteAnalysisHandler(ctx) {
     analysis = await ai.analyzeSite(job.user_id, {
       lead: leadView, evidence: site.evidence, mission: missionView,
     });
-    leads.saveWebsiteAnalysis(lead.id, {
+    await leads.saveWebsiteAnalysis(lead.id, {
       ok: true, url: site.url, evidence: site.evidence,
       findings: analysis.findings, score: analysis.quality_score, method: site.method,
     });
@@ -47,7 +47,7 @@ export async function siteAnalysisHandler(ctx) {
       evidence: presence?.evidence || (site?.error ? { fetchError: site.error } : {}),
       mission: missionView,
     });
-    leads.savePresenceAnalysis(lead.id, {
+    await leads.savePresenceAnalysis(lead.id, {
       evidence: presence?.evidence || {},
       findings: analysis.findings,
       score: analysis.opportunity_score,
@@ -59,16 +59,16 @@ export async function siteAnalysisHandler(ctx) {
   if (analysis.contact_route_found && !lead.contact_route) {
     const found = site?.evidence?.mailtoAddresses?.[0] || null;
     if (found) {
-      ctx.db.run(
+      await ctx.db.run(
         'UPDATE leads SET email_public = ?, contact_route = ?, contact_evidence = ? WHERE id = ?',
         found, 'email', site?.url || lead.discovery_source, lead.id
       );
     }
   }
 
-  leads.setStatus(lead.id, 'analyzed');
-  ctx.heartbeat();
-  queue.enqueue({
+  await leads.setStatus(lead.id, 'analyzed');
+  await ctx.heartbeat();
+  await queue.enqueue({
     userId: job.user_id, missionId: lead.mission_id,
     stage: STAGE.QUALIFICATION, payload: { leadId: lead.id },
     idempotencyKey: `qualification:${lead.id}`,
@@ -80,10 +80,10 @@ export async function siteAnalysisHandler(ctx) {
 export async function qualificationHandler(ctx) {
   const { services, payload, job, mission } = ctx;
   const { leads, ai, queue } = services;
-  const lead = leads.get(payload.leadId);
+  const lead = await leads.get(payload.leadId);
   if (!lead) throw err.notFound('Lead');
 
-  const evidence = leads.evidenceFor(lead.id);
+  const evidence = await leads.evidenceFor(lead.id);
   const result = await ai.qualifyLead(job.user_id, {
     lead: evidence.lead,
     analysis: { website: evidence.website, presence: evidence.presence },
@@ -95,7 +95,7 @@ export async function qualificationHandler(ctx) {
     previousContact: lead.first_contacted_at ? 'already contacted' : 'never contacted',
   });
 
-  leads.saveQualification(lead.id, {
+  await leads.saveQualification(lead.id, {
     qualified: result.qualified,
     confidence: result.confidence,
     reason: result.reason,
@@ -108,13 +108,13 @@ export async function qualificationHandler(ctx) {
 
   if (!result.qualified) {
     // §14: do not contact every discovered business.
-    leads.setStatus(lead.id, 'closed');
+    await leads.setStatus(lead.id, 'closed');
     ctx.log.info(`lead ${lead.id} not qualified: ${result.reason || 'insufficient evidence'}`);
     return { leadId: lead.id, qualified: false, confidence: result.confidence };
   }
 
-  leads.setStatus(lead.id, 'qualified');
-  queue.enqueue({
+  await leads.setStatus(lead.id, 'qualified');
+  await queue.enqueue({
     userId: job.user_id, missionId: lead.mission_id,
     stage: STAGE.OUTREACH, payload: { leadId: lead.id },
     idempotencyKey: `outreach:${lead.id}`,

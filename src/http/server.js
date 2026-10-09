@@ -1,4 +1,6 @@
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { AppError, err } from '../core/errors.js';
 import { Router } from './router.js';
 import {
@@ -6,6 +8,7 @@ import {
 } from './middleware.js';
 import { registerAccountRoutes } from './routes/account.js';
 import { registerWorkspaceRoutes } from './routes/workspace.js';
+import { registerSystemRoutes } from './routes/system.js';
 import config from '../config.js';
 import { createLogger } from '../core/logger.js';
 
@@ -19,11 +22,22 @@ const log = createLogger('http');
  * services the worker pipeline uses.
  */
 export function createServer(system) {
+  return tuneKeepAlive(http.createServer(createHandler(system)));
+}
+
+/**
+ * The request listener on its own, with no socket attached.
+ *
+ * Serverless runtimes (Vercel) and tests both want the raw `(req, res)`
+ * function; `createServer` is only the local/socket wrapper around it.
+ */
+export function createHandler(system) {
   const router = new Router();
   registerAccountRoutes(router, system);
   registerWorkspaceRoutes(router, system);
+  registerSystemRoutes(router, system);
 
-  const server = http.createServer(async (req, res) => {
+  return async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
@@ -33,11 +47,11 @@ export function createServer(system) {
     let user = null;
     let sessionRowId = null;
     if (token) {
-      const row = system.auth.sessions.findValid(token);
+      const row = await system.auth.sessions.findValid(token);
       if (row) {
         sessionRowId = row.id;
-        system.auth.sessions.touch(row.id);
-        user = system.auth.publicUser(row.user_id);
+        await system.auth.sessions.touch(row.id);
+        user = await system.auth.publicUser(row.user_id);
       }
     }
 
@@ -66,10 +80,14 @@ export function createServer(system) {
     };
 
     try {
-      if (pathname === '/' || pathname === '/health') {
+      // Liveness probe stays a tiny JSON payload, never the SPA shell.
+      if (pathname === '/health') {
         return ctx.json(200, { ok: true, service: 'nexora-outreach' });
       }
       if (!pathname.startsWith('/api/')) {
+        // The front end is a static app; unknown non-file paths fall back to
+        // its shell so client-side routes survive a refresh.
+        if (await serveStatic(req, res, pathname)) return;
         return ctx.json(404, { error: 'NOT_FOUND', message: 'Unknown endpoint.' });
       }
 
@@ -102,9 +120,64 @@ export function createServer(system) {
     } catch (e) {
       handleError(ctx, e);
     }
-  });
+  };
+}
 
-  return server;
+/** Extensions the static app is allowed to serve, mapped to their MIME type. */
+const STATIC_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json',
+  '.woff2': 'font/woff2',
+};
+
+/**
+ * Serves the single-page app from `public/`.
+ *
+ * Only GET/HEAD are honoured. Anything that looks like a file but is missing
+ * returns false (a real 404); extension-less paths fall back to the shell so
+ * client-side routes can be deep-linked. Path traversal is impossible because
+ * the resolved path must stay inside `public/`.
+ */
+async function serveStatic(req, res, pathname) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+
+  const root = path.resolve(config.root, 'public');
+  let rel;
+  try { rel = decodeURIComponent(pathname).replace(/^\/+/, ''); } catch { return false; }
+  if (rel === '' || rel === '/') rel = 'index.html';
+
+  const candidate = path.resolve(root, rel);
+  if (candidate !== root && !candidate.startsWith(root + path.sep)) return false;
+
+  let file = candidate;
+  try {
+    if ((await fs.promises.stat(file)).isDirectory()) file = path.join(file, 'index.html');
+  } catch {
+    if (path.extname(rel)) return false; // a missing asset is a genuine 404
+    file = path.join(root, 'index.html'); // otherwise: client-side route
+  }
+
+  try {
+    const body = await fs.promises.readFile(file);
+    const ext = path.extname(file).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': STATIC_TYPES[ext] || 'application/octet-stream',
+      'Content-Length': body.length,
+      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=300',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(req.method === 'HEAD' ? undefined : body);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function timingSafeEqual(a, b) {
@@ -126,6 +199,21 @@ function handleError(ctx, error) {
   log.error('unhandled request error', { message: error?.message, ip });
   // Never leak internals to the client.
   return ctx.json(500, { error: 'INTERNAL_ERROR', message: 'Something went wrong handling that request.' });
+}
+
+/**
+ * Keep-alive must outlive a client's stale-socket check.
+ *
+ * Node's default is 5s, while the fetch client only validates idle sockets
+ * every 30s — so a request issued between 5s and 30s of idleness rides a socket
+ * the server already closed and dies with ECONNRESET (especially visible on
+ * Windows). Holding sockets for longer than that check window removes the race
+ * without keeping them open unbounded.
+ */
+function tuneKeepAlive(server) {
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+  return server;
 }
 
 export default createServer;

@@ -1,112 +1,176 @@
-import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import config from '../config.js';
+import { translate } from './dialect.js';
+import { SqliteDriver } from './sqlite.js';
+import { PostgresDriver } from './postgres.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * node:sqlite returns INTEGER columns as JS numbers when they fit, but
- * `lastInsertRowid` may surface as BigInt. Normalise everything so callers
- * always get plain numbers.
+ * Statements issued inside `Db.tx()` must run on the transaction's own
+ * connection, otherwise PostgreSQL would send them through the pool and they
+ * would sit outside the transaction. An AsyncLocalStorage scope carries the
+ * transaction-bound driver so existing call sites (`this.db.run(...)` inside a
+ * `tx` callback) keep working unchanged on both databases.
  */
-function normalise(value) {
-  if (typeof value === 'bigint') return Number(value);
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    for (const k of Object.keys(value)) {
-      const v = value[k];
-      if (typeof v === 'bigint') value[k] = Number(v);
-    }
-  }
-  return value;
-}
+const txStore = new AsyncLocalStorage();
+
+/** Bumped whenever schema.sql / schema.postgres.sql change. */
+export const SCHEMA_VERSION = '3';
+
+/** Arbitrary but stable advisory-lock key guarding schema application. */
+const SCHEMA_LOCK_ID = 728_190_431;
 
 export class Db {
-  constructor(file) {
-    this.file = file;
-    if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-    this.raw = new DatabaseSync(file);
-    this.raw.exec('PRAGMA journal_mode = WAL;');
-    this.raw.exec('PRAGMA foreign_keys = ON;');
-    this.raw.exec('PRAGMA busy_timeout = 5000;');
-    this._stmts = new Map();
+  constructor(driver) {
+    this.driver = driver;
+    this.dialect = driver.dialect;
+    this.file = driver.file ?? null;
   }
 
-  _prepare(sql) {
-    let s = this._stmts.get(sql);
-    if (!s) {
-      s = this.raw.prepare(sql);
-      this._stmts.set(sql, s);
+  _driver() {
+    const ctx = txStore.getStore();
+    return ctx && ctx.db === this ? ctx.txDriver : this.driver;
+  }
+
+  /** Execute a statement → { changes, lastInsertRowid }. */
+  async run(sql, ...params) {
+    const t = translate(sql, this.dialect, params);
+    return this._driver().run(t.sql, t.params);
+  }
+
+  async get(sql, ...params) {
+    const t = translate(sql, this.dialect, params);
+    return this._driver().get(t.sql, t.params);
+  }
+
+  async all(sql, ...params) {
+    const t = translate(sql, this.dialect, params);
+    return this._driver().all(t.sql, t.params);
+  }
+
+  /** Multi-statement DDL. NOT translated — schema files are dialect-native. */
+  async exec(sql) {
+    return this._driver().exec(sql);
+  }
+
+  /**
+   * Run `fn` inside a transaction. Rolls back on throw.
+   * Nested transactions are a bug, not a feature, so they are rejected.
+   */
+  async tx(fn) {
+    const existing = txStore.getStore();
+    if (existing && existing.db === this) {
+      throw new Error('Nested transactions are not supported.');
     }
-    return s;
+    return this.driver.transaction((txDriver) => txStore.run({ db: this, txDriver }, () => fn(this)));
   }
 
-  /** Execute a statement, returning { changes, lastInsertRowid }. */
-  run(sql, ...params) {
-    const r = this._prepare(sql).run(...params.map(normalise));
-    return { changes: Number(r.changes), lastInsertRowid: Number(r.lastInsertRowid) };
+  async hasTable(name) {
+    if (this.dialect === 'postgres') {
+      const row = await this.get('SELECT to_regclass(?) AS t', name);
+      return Boolean(row && row.t);
+    }
+    const row = await this.get(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      name,
+    );
+    return Boolean(row);
   }
 
-  get(sql, ...params) {
-    return normalise(this._prepare(sql).get(...params.map(normalise)));
-  }
-
-  all(sql, ...params) {
-    return this._prepare(sql).all(...params.map(normalise)).map(normalise);
-  }
-
-  exec(sql) { this.raw.exec(sql); }
-
-  /** Synchronous transaction. Rolls back on throw. */
-  tx(fn) {
-    this.raw.exec('BEGIN IMMEDIATE');
+  async _readSchemaVersion() {
     try {
-      const out = fn();
-      this.raw.exec('COMMIT');
-      return out;
-    } catch (err) {
-      try { this.raw.exec('ROLLBACK'); } catch { /* already rolled back */ }
-      throw err;
+      const row = await this.get('SELECT value FROM meta WHERE key = ?', 'schema_version');
+      return row ? row.value : null;
+    } catch {
+      return null;
     }
   }
 
-  close() {
-    this._stmts.clear();
-    try { this.raw.close(); } catch { /* already closed */ }
+  async _writeSchemaVersion() {
+    await this.run(
+      'INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+      'schema_version',
+      SCHEMA_VERSION,
+    );
   }
 
-  /** Apply the schema. Idempotent. */
-  migrate() {
-    const sql = fs.readFileSync(path.join(HERE, 'schema.sql'), 'utf8');
-    this.raw.exec(sql);
-    const cur = this.get('SELECT value FROM meta WHERE key = ?', 'schema_version');
-    if (!cur) {
-      this.run('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)', 'schema_version', '1');
+  /**
+   * Apply the dialect's schema. Idempotent and safe to call on every boot:
+   * a fast version check skips the DDL entirely once it has been applied.
+   * PostgreSQL additionally takes an advisory lock so concurrent cold starts
+   * cannot race each other.
+   */
+  async migrate() {
+    const metaExists = await this.hasTable('meta');
+    if (metaExists) {
+      const current = await this._readSchemaVersion();
+      if (current === SCHEMA_VERSION) return false;
     }
+
+    const file = this.dialect === 'postgres' ? 'schema.postgres.sql' : 'schema.sql';
+    const ddl = fs.readFileSync(path.join(HERE, file), 'utf8');
+
+    if (this.dialect === 'postgres') {
+      await this.tx(async () => {
+        await this.run('SELECT pg_advisory_xact_lock(?)', SCHEMA_LOCK_ID);
+        await this.exec(ddl);
+        await this._writeSchemaVersion();
+      });
+    } else {
+      await this.exec(ddl);
+      await this._writeSchemaVersion();
+    }
+    return true;
+  }
+
+  async close() {
+    await this.driver.close();
   }
 }
 
 let singleton = null;
 
-/** Shared application-wide database handle. */
+/**
+ * The application-wide database handle.
+ *
+ * PostgreSQL (Neon, configured through Vercel) is used whenever `DATABASE_URL`
+ * is present — that is the production path. Without it the app falls back to
+ * the zero-install SQLite file so development and the test suite never require
+ * a local database server.
+ */
 export function getDb() {
   if (!singleton) {
-    singleton = new Db(config.dbFile);
-    singleton.migrate();
+    const url = config.databaseUrl;
+    const driver = url
+      ? new PostgresDriver(url, { max: config.dbPoolMax })
+      : new SqliteDriver(config.dbFile);
+    singleton = new Db(driver);
   }
   return singleton;
 }
 
-/** Isolated database (used by tests). `:memory:` is fast and leak-free. */
+/** Isolated in-memory SQLite database (used by tests). */
 export function createTestDb(file = ':memory:') {
-  const db = new Db(file);
-  db.migrate();
-  return db;
+  return new Db(new SqliteDriver(file));
 }
 
-export function closeDb() {
-  if (singleton) { singleton.close(); singleton = null; }
+/** PostgreSQL test database — used by the Postgres integration suite. */
+export function createPostgresDb(url) {
+  if (!url) throw new Error('createPostgresDb requires a connection URL');
+  return new Db(new PostgresDriver(url, { max: 3, allowExitOnIdle: true }));
+}
+
+export async function closeDb() {
+  if (singleton) {
+    const s = singleton;
+    singleton = null;
+    await s.close();
+  }
 }
 
 export default getDb;

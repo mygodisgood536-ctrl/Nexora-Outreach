@@ -23,11 +23,15 @@ const PERMANENT = new Set([
   'SUPPRESSED',
   'DUPLICATE',
   'AI_INVALID_OUTPUT',
+  'AI_MODEL_UNAVAILABLE',
   'NOT_QUALIFIED',
   'NO_CONTACT_ROUTE',
   'MAILBOX_NOT_CONNECTED',
   'MAILBOX_AUTH_EXPIRED',
   'RATE_LIMITED_PERMANENT',
+  // An exhausted API rate budget must not be hammered by the retry loop; the
+  // limiter's own window already defines when it becomes eligible again.
+  'RATE_LIMITED',
 ]);
 
 /** Transient failures are retried with bounded backoff. */
@@ -80,6 +84,8 @@ export const err = {
   browser: (code, msg, detail) => new AppError(code, msg, { kind: ERROR_KIND.BROWSER, status: 502, detail }),
   discovery: (code, msg, detail) => new AppError(code, msg, { kind: ERROR_KIND.DISCOVERY, status: 502, detail }),
   suppressed: (msg = 'Recipient is suppressed') => new AppError('SUPPRESSED', msg, { kind: ERROR_KIND.EMAIL, status: 409 }),
+  tooManyRequests: (msg = 'Too many requests') => new AppError('RATE_LIMITED', msg, { kind: ERROR_KIND.AUTH, status: 429 }),
+  notConfigured: (msg = 'This integration is not configured yet') => new AppError('NOT_CONFIGURED', msg, { status: 501 }),
 };
 
 /** User-facing text for a job failure (spec §30 "show user-friendly errors"). */
@@ -92,6 +98,7 @@ export function userFacingMessage(error) {
       case 'DUPLICATE': return 'This business was already contacted, so it was skipped.';
       case 'NO_CONTACT_ROUTE': return 'No verified public contact route was found for this business.';
       case 'AI_PROVIDER_ERROR': return 'The AI provider could not complete this step. It will retry automatically.';
+      case 'AI_MODEL_UNAVAILABLE': return 'The selected AI model is not available to this workspace. Choose another model in Settings.';
       case 'AI_TIMEOUT': return 'The AI step timed out and will be retried.';
       case 'TIMEOUT': return 'A network request timed out.';
       case 'HTTP_429': return 'A provider rate limit was reached. Work will resume automatically.';

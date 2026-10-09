@@ -25,6 +25,10 @@ const log = createLogger('app');
 export async function start({ system: injected, cfg = config } = {}) {
   const system = injected ?? createSystem();
 
+  // A brand-new database (e.g. a fresh Neon branch) has no schema yet.
+  // migrate() is idempotent, so this is a no-op once the schema is current.
+  await system.db.migrate();
+
   // Verify the central AI runtime is reachable before accepting traffic, so a
   // misconfigured install fails loudly instead of at the first outreach.
   const ai = await system.services.aiRuntime.diagnose();

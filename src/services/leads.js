@@ -12,20 +12,10 @@ export const LEAD_STATUS = [
   'suppressed', 'closed', 'failed',
 ];
 
-/**
- * Lead persistence with cross-mission duplicate prevention (spec §29).
- *
- * A unique index on (user_id, dedupe_key) guarantees the same business is
- * never re-discovered or re-contacted for one user, even across missions.
- */
 export class LeadService {
   constructor({ db }) { this.db = db; }
 
-  /**
-   * Insert a discovered candidate. Returns the existing lead when the same
-   * business is already known, so the caller can skip downstream work.
-   */
-  createFromCandidate(userId, missionId, candidate) {
+  async createFromCandidate(userId, missionId, candidate) {
     const businessName = String(candidate.name || candidate.businessName || '').trim();
     if (!businessName) return { created: false, reason: 'missing_name' };
 
@@ -37,23 +27,21 @@ export class LeadService {
       city: candidate.city, region: candidate.region, country,
     });
 
-    const existing = this.db.get(
+    const existing = await this.db.get(
       'SELECT * FROM leads WHERE user_id = ? AND dedupe_key = ?', userId, dedupeKey
     );
     if (existing) return { created: false, reason: 'duplicate', lead: existing };
 
     const emailPublic = normalizeEmail(candidate.email || candidate.emailPublic);
     const phonePublic = normalizePhone(candidate.phone || candidate.phonePublic);
-    // A contact route is only recorded when the source actually supplied it,
-    // together with the URL that witnessed it. Never inferred (spec §29).
     const contactRoute = emailPublic ? 'email' : phonePublic ? 'phone' : null;
 
-    const id = this.db.run(
+    const result = await this.db.run(
       `INSERT INTO leads(mission_id, user_id, business_name, website_url, domain, dedupe_key,
                          country, region, city, address, phone_public, email_public,
                          contact_route, contact_evidence, discovery_source, discovery_meta,
                          rating, review_count)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
       missionId, userId, businessName, websiteUrl, domain, dedupeKey,
       country, candidate.region || null, candidate.city || null,
       candidate.address || null, phonePublic, emailPublic,
@@ -62,41 +50,43 @@ export class LeadService {
       candidate.meta ? JSON.stringify(candidate.meta) : null,
       typeof candidate.rating === 'number' ? candidate.rating : null,
       typeof candidate.reviewCount === 'number' ? candidate.reviewCount : null
-    ).lastInsertRowid;
+    );
+    const id = result.lastInsertRowid;
 
-    return { created: true, lead: this.get(id) };
+    return { created: true, lead: await this.get(id) };
   }
 
-  get(id) { return this.db.get('SELECT * FROM leads WHERE id = ?', id); }
+  async get(id) { return this.db.get('SELECT * FROM leads WHERE id = ?', id); }
 
-  getForUser(id, userId) {
-    const lead = this.get(id);
+  async getForUser(id, userId) {
+    const lead = await this.get(id);
     if (!lead || lead.user_id !== userId) throw err.notFound('Lead');
     return lead;
   }
 
-  setStatus(id, status, { error = null } = {}) {
+  async setStatus(id, status, { error = null } = {}) {
     if (!LEAD_STATUS.includes(status)) throw err.validation(`Unknown lead status: ${status}`);
-    this.db.run(
+    await this.db.run(
       "UPDATE leads SET status = ?, stage_error = ?, updated_at = datetime('now') WHERE id = ?",
       status, error, id
     );
     return this.get(id);
   }
 
-  markContacted(id) {
-    this.db.run(
+  async markContacted(id) {
+    await this.db.run(
       "UPDATE leads SET first_contacted_at = COALESCE(first_contacted_at, ?), updated_at = datetime('now') WHERE id = ?",
       nowSqlite(), id
     );
   }
 
-  /** Has this lead ever been emailed? (spec §14 "previous contact state") */
-  hasBeenContacted(id) {
-    return Boolean(this.get(id)?.first_contacted_at);
+  async hasBeenContacted(id) {
+    const lead = await this.get(id);
+    return Boolean(lead?.first_contacted_at);
   }
-saveWebsiteAnalysis(leadId, { ok, url, error, evidence, findings, score, method, fetchedMs }) {
-    this.db.run(
+
+  async saveWebsiteAnalysis(leadId, { ok, url, error, evidence, findings, score, method, fetchedMs }) {
+    await this.db.run(
       `INSERT INTO website_analyses(lead_id, url, ok, error, evidence, findings, score, method, fetched_ms)
        VALUES(?,?,?,?,?,?,?,?,?)
        ON CONFLICT(lead_id) DO UPDATE SET
@@ -111,8 +101,8 @@ saveWebsiteAnalysis(leadId, { ok, url, error, evidence, findings, score, method,
     return this.websiteAnalysis(leadId);
   }
 
-  savePresenceAnalysis(leadId, { evidence, findings, score, method }) {
-    this.db.run(
+  async savePresenceAnalysis(leadId, { evidence, findings, score, method }) {
+    await this.db.run(
       `INSERT INTO presence_analyses(lead_id, evidence, findings, score, method)
        VALUES(?,?,?,?,?)
        ON CONFLICT(lead_id) DO UPDATE SET
@@ -126,8 +116,8 @@ saveWebsiteAnalysis(leadId, { ok, url, error, evidence, findings, score, method,
     return this.presenceAnalysis(leadId);
   }
 
-  saveQualification(leadId, { qualified, confidence, reason, observed, opportunity, relevantService, explanation, model, error }) {
-    this.db.run(
+  async saveQualification(leadId, { qualified, confidence, reason, observed, opportunity, relevantService, explanation, model, error }) {
+    await this.db.run(
       `INSERT INTO qualifications(lead_id, model, qualified, confidence, reason, observed, opportunity,
                                    relevant_service, explanation, error)
        VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -143,19 +133,15 @@ saveWebsiteAnalysis(leadId, { ok, url, error, evidence, findings, score, method,
     return this.qualification(leadId);
   }
 
-  websiteAnalysis(leadId) { return parseJson(this.db.get('SELECT * FROM website_analyses WHERE lead_id = ?', leadId)); }
-  presenceAnalysis(leadId) { return parseJson(this.db.get('SELECT * FROM presence_analyses WHERE lead_id = ?', leadId)); }
-  qualification(leadId) { return parseJson(this.db.get('SELECT * FROM qualifications WHERE lead_id = ?', leadId)); }
+  async websiteAnalysis(leadId) { return parseJson(await this.db.get('SELECT * FROM website_analyses WHERE lead_id = ?', leadId)); }
+  async presenceAnalysis(leadId) { return parseJson(await this.db.get('SELECT * FROM presence_analyses WHERE lead_id = ?', leadId)); }
+  async qualification(leadId) { return parseJson(await this.db.get('SELECT * FROM qualifications WHERE lead_id = ?', leadId)); }
 
-  /**
-   * The evidence bundle handed to the AI stages. Only real recorded
-   * observations are included — nothing is synthesised here.
-   */
-  evidenceFor(leadId) {
-    const lead = this.get(leadId);
+  async evidenceFor(leadId) {
+    const lead = await this.get(leadId);
     if (!lead) return null;
-    const site = this.websiteAnalysis(leadId);
-    const presence = this.presenceAnalysis(leadId);
+    const site = await this.websiteAnalysis(leadId);
+    const presence = await this.presenceAnalysis(leadId);
     return {
       lead: {
         id: lead.id,
@@ -173,11 +159,11 @@ saveWebsiteAnalysis(leadId, { ok, url, error, evidence, findings, score, method,
       },
       website: site ? { ok: site.ok, url: site.url, error: site.error, score: site.score, findings: site.findings, evidence: site.evidence } : null,
       presence: presence ? { findings: presence.findings, score: presence.score, evidence: presence.evidence } : null,
-      qualification: this.qualification(leadId),
+      qualification: await this.qualification(leadId),
     };
   }
 
-  list(userId, { missionId = null, status = null, limit = 100, offset = 0 } = {}) {
+  async list(userId, { missionId = null, status = null, limit = 100, offset = 0 } = {}) {
     const clauses = ['user_id = ?'];
     const params = [userId];
     if (missionId) { clauses.push('mission_id = ?'); params.push(missionId); }
@@ -189,11 +175,13 @@ saveWebsiteAnalysis(leadId, { ok, url, error, evidence, findings, score, method,
     );
   }
 
-  count(userId, missionId = null) {
-    if (missionId) {
-      return this.db.get('SELECT COUNT(*) n FROM leads WHERE user_id = ? AND mission_id = ?', userId, missionId).n;
-    }
-    return this.db.get('SELECT COUNT(*) n FROM leads WHERE user_id = ?', userId).n;
+  async count(userId, { missionId = null, status = null } = {}) {
+    const clauses = ['user_id = ?'];
+    const params = [userId];
+    if (missionId) { clauses.push('mission_id = ?'); params.push(missionId); }
+    if (status) { clauses.push('status = ?'); params.push(status); }
+    const row = await this.db.get(`SELECT COUNT(*) n FROM leads WHERE ${clauses.join(' AND ')}`, ...params);
+    return row.n;
   }
 
   toPublic(row) {

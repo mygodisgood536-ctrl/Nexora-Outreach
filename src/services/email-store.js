@@ -13,30 +13,19 @@ export const CONNECTION_STATUS = {
   ERROR: 'error',
 };
 
-/**
- * Persistence for authorized mailbox connections.
- *
- * Access and refresh tokens are encrypted at rest with AES-256-GCM and are
- * NEVER returned to the client (spec §5.3, §6). Ordinary mailbox passwords are
- * never requested or stored anywhere in this system.
- */
 export class EmailConnectionStore {
   constructor({ db }) { this.db = db; }
 
-  raw(userId, provider) {
+  async raw(userId, provider) {
     return this.db.get(
       'SELECT * FROM email_connections WHERE user_id = ? AND provider = ?', userId, provider
     );
   }
 
-  list(userId) {
+  async list(userId) {
     return this.db.all('SELECT * FROM email_connections WHERE user_id = ? ORDER BY provider', userId);
   }
 
-  /**
-   * Client-safe view: connection state without any token material.
-   * This is the only shape that should ever reach the frontend.
-   */
   toPublic(row) {
     if (!row) {
       return { provider: null, status: CONNECTION_STATUS.DISCONNECTED, accountEmail: null };
@@ -51,11 +40,10 @@ export class EmailConnectionStore {
     };
   }
 
-  /** Store (or replace) an authorized connection with encrypted tokens. */
-  save(userId, provider, { accessToken, refreshToken = null, scopes = [], expiresAt = null, accountEmail = null, ip = null }) {
+  async save(userId, provider, { accessToken, refreshToken = null, scopes = [], expiresAt = null, accountEmail = null, ip = null }) {
     if (!accessToken) throw err.email('MAILBOX_AUTH_FAILED', 'Authorization did not return an access token.');
     const now = nowSqlite();
-    this.db.run(
+    await this.db.run(
       `INSERT INTO email_connections
          (user_id, provider, account_email, access_token_enc, refresh_token_enc,
           scopes, token_expires_at, status, status_detail, created_at, updated_at)
@@ -73,14 +61,13 @@ export class EmailConnectionStore {
       JSON.stringify(scopes ?? []),
       expiresAt, now, now
     );
-    recordAudit(this.db, { userId, actor: 'user', action: 'email.connected', entityType: 'email_connection', entityId: provider, ip });
+    await recordAudit(this.db, { userId, actor: 'user', action: 'email.connected', entityType: 'email_connection', entityId: provider, ip });
     log.info(`mailbox connected: ${provider} for user ${userId}`);
-    return this.toPublic(this.raw(userId, provider));
+    return this.toPublic(await this.raw(userId, provider));
   }
 
-  /** Decrypt tokens for server-side use only. */
-  tokens(userId, provider) {
-    const row = this.raw(userId, provider);
+  async tokens(userId, provider) {
+    const row = await this.raw(userId, provider);
     if (!row) throw err.email('MAILBOX_NOT_CONNECTED', 'No mailbox is connected for this account.');
     let accessToken = null;
     let refreshToken = null;
@@ -105,28 +92,26 @@ export class EmailConnectionStore {
     return Number.isFinite(t) && t - skewSeconds * 1000 <= Date.now();
   }
 
-  /** Persist rotated tokens after a refresh. */
-  updateTokens(userId, provider, { accessToken, refreshToken = null, expiresAt = null }) {
+  async updateTokens(userId, provider, { accessToken, refreshToken = null, expiresAt = null }) {
     const sets = ["access_token_enc = ?", "status = 'connected'", "updated_at = datetime('now')"];
     const params = [encrypt(accessToken)];
     if (refreshToken) { sets.push('refresh_token_enc = ?'); params.push(encrypt(refreshToken)); }
     if (expiresAt) { sets.push('token_expires_at = ?'); params.push(expiresAt); }
-    this.db.run(
+    await this.db.run(
       `UPDATE email_connections SET ${sets.join(', ')} WHERE user_id = ? AND provider = ?`,
       ...params, userId, provider
     );
   }
 
-  markStatus(userId, provider, status, detail = null) {
-    this.db.run(
+  async markStatus(userId, provider, status, detail = null) {
+    await this.db.run(
       'UPDATE email_connections SET status = ?, status_detail = ?, updated_at = datetime(\'now\') WHERE user_id = ? AND provider = ?',
       status, detail, userId, provider
     );
   }
 
-  /** Disconnect: wipe token material immediately (spec §6 disconnect/reconnect). */
-  disconnect(userId, provider, { ip = null } = {}) {
-    const res = this.db.run(
+  async disconnect(userId, provider, { ip = null } = {}) {
+    const res = await this.db.run(
       `UPDATE email_connections
           SET access_token_enc = NULL, refresh_token_enc = NULL, status = 'disconnected',
               status_detail = NULL, updated_at = datetime('now')
@@ -134,14 +119,13 @@ export class EmailConnectionStore {
       userId, provider
     );
     if (res.changes > 0) {
-      recordAudit(this.db, { userId, actor: 'user', action: 'email.disconnected', entityType: 'email_connection', entityId: provider, ip });
+      await recordAudit(this.db, { userId, actor: 'user', action: 'email.disconnected', entityType: 'email_connection', entityId: provider, ip });
       log.info(`mailbox disconnected: ${provider} for user ${userId}`);
     }
     return res.changes > 0;
   }
 
-  /** The connection a mission should use: any healthy connected provider. */
-  activeFor(userId) {
+  async activeFor(userId) {
     return this.db.get(
       `SELECT * FROM email_connections
         WHERE user_id = ? AND status = 'connected'

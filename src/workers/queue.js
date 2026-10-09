@@ -30,33 +30,67 @@ export function backoffMs(attempts, base = 15000, capMs = 30 * 60 * 1000) {
   return Math.min(capMs, raw + jitter);
 }
 
+/**
+ * Durable job queue (spec §23, §30): claim/lease, bounded retry, crash
+ * recovery, safe cancel, idempotency.
+ *
+ * Every method is `async` — the queue sits on the asynchronous database layer
+ * (PostgreSQL in production, SQLite for the zero-install test suite).
+ */
 export class JobQueue {
   constructor(db) {
     this.db = db;
   }
 
-  _history(jobId, event, detail = null) {
-    this.db.run('INSERT INTO job_history(job_id, event, detail) VALUES(?,?,?)', jobId, event, detail);
+  async _history(jobId, event, detail = null) {
+    try {
+      await this.db.run('INSERT INTO job_history(job_id, event, detail) VALUES(?,?,?)', jobId, event, detail);
+    } catch (e) {
+      // History is diagnostic; never let it break the job lifecycle.
+      log.warn('job history write failed', { jobId, event, message: e?.message });
+    }
   }
 
   /**
    * Enqueue a job. `idempotencyKey` makes replays safe: the same key returns
    * the existing job instead of creating a duplicate (spec §23).
+   *
+   * The insert uses `ON CONFLICT DO NOTHING` so two concurrent enqueues with
+   * the same key cannot both win — the loser reads the winner's row.
    */
-  enqueue({ userId, missionId = null, stage, payload = {}, maxAttempts = 3, runAfter = null, idempotencyKey = null }) {
-    if (idempotencyKey) {
-      const existing = this.db.get('SELECT * FROM automation_jobs WHERE idempotency_key = ?', idempotencyKey);
-      if (existing) return { job: existing, created: false };
-    }
-    const r = this.db.run(
+  async enqueue({
+    userId, missionId = null, stage, payload = {},
+    maxAttempts = 3, runAfter = null, idempotencyKey = null,
+  }) {
+    const r = await this.db.run(
       `INSERT INTO automation_jobs
          (user_id, mission_id, stage, payload, status, max_attempts, run_after, idempotency_key)
-       VALUES(?,?,?,?,'queued',?,?,?)`,
+       VALUES(?,?,?,?,'queued',?,?,?)
+       ON CONFLICT (idempotency_key) DO NOTHING
+       RETURNING id`,
       userId, missionId, stage, JSON.stringify(payload ?? {}), maxAttempts,
-      runAfter || nowSqlite(), idempotencyKey
+      runAfter || nowSqlite(), idempotencyKey,
     );
-    const job = this.db.get('SELECT * FROM automation_jobs WHERE id = ?', r.lastInsertRowid);
-    this._history(job.id, 'created', stage);
+
+    if (r.changes === 0 && idempotencyKey) {
+      const existing = await this.db.get(
+        'SELECT * FROM automation_jobs WHERE idempotency_key = ?',
+        idempotencyKey,
+      );
+      if (existing) return { job: existing, created: false };
+      // Conflict target matched nothing and no row appeared: fall through to
+      // a plain read by id so the caller always gets a job back.
+    }
+
+    const job = await this.db.get('SELECT * FROM automation_jobs WHERE id = ?', r.lastInsertRowid);
+    if (!job) {
+      const existing = idempotencyKey
+        ? await this.db.get('SELECT * FROM automation_jobs WHERE idempotency_key = ?', idempotencyKey)
+        : null;
+      if (existing) return { job: existing, created: false };
+      throw new Error('Job enqueue failed: the inserted job could not be read back.');
+    }
+    await this._history(job.id, 'created', stage);
     return { job, created: true };
   }
 
@@ -65,7 +99,7 @@ export class JobQueue {
    * The lease is what makes crash recovery possible: a worker that dies
    * leaves `lease_until` behind and the job is reclaimed later.
    */
-  claim(workerId, { leaseMs = 10 * 60 * 1000, stages = null } = {}) {
+  async claim(workerId, { leaseMs = 10 * 60 * 1000, stages = null } = {}) {
     const now = nowSqlite();
     const leaseUntil = sqliteUtc(new Date(Date.now() + leaseMs));
     const stageClause = stages && stages.length ? `AND stage IN (${stages.map(() => '?').join(',')})` : '';
@@ -74,7 +108,7 @@ export class JobQueue {
     const selectParams = [now, now];
     if (stages && stages.length) selectParams.push(...stages);
 
-    const job = this.db.get(
+    const job = await this.db.get(
       `SELECT * FROM automation_jobs
         WHERE status IN ('queued','waiting_retry')
           AND run_after <= ?
@@ -82,39 +116,39 @@ export class JobQueue {
           ${stageClause}
         ORDER BY run_after ASC, id ASC
         LIMIT 1`,
-      ...selectParams
+      ...selectParams,
     );
     if (!job) return null;
 
-    const res = this.db.run(
+    const res = await this.db.run(
       `UPDATE automation_jobs
           SET status='running', attempts=attempts+1, worker_id=?, lease_until=?, started_at=?, updated_at=datetime('now')
         WHERE id=? AND status IN ('queued','waiting_retry')`,
-      workerId, leaseUntil, now, job.id
+      workerId, leaseUntil, now, job.id,
     );
     if (res.changes === 0) return null; // lost the race to another worker
 
-    this._history(job.id, 'claimed', workerId);
+    await this._history(job.id, 'claimed', workerId);
     return this.db.get('SELECT * FROM automation_jobs WHERE id = ?', job.id);
   }
 
-  complete(jobId, result = null) {
-    this.db.run(
+  async complete(jobId, result = null) {
+    await this.db.run(
       `UPDATE automation_jobs
           SET status='succeeded', result=?, finished_at=datetime('now'),
               lease_until=NULL, updated_at=datetime('now')
         WHERE id=?`,
-      result === null ? null : JSON.stringify(result), jobId
+      result === null ? null : JSON.stringify(result), jobId,
     );
-    this._history(jobId, 'succeeded');
+    await this._history(jobId, 'succeeded');
   }
 
   /**
    * Record a failure. Transient failures are rescheduled with bounded backoff;
    * permanent failures stop immediately rather than retrying forever.
    */
-  fail(jobId, error, { kind = 'system', retryable = false, maxAttempts = null } = {}) {
-    const job = this.db.get('SELECT * FROM automation_jobs WHERE id = ?', jobId);
+  async fail(jobId, error, { kind = 'system', retryable = false, maxAttempts = null } = {}) {
+    const job = await this.db.get('SELECT * FROM automation_jobs WHERE id = ?', jobId);
     if (!job) return null;
     const message = String(error?.message || error || 'Unknown error').slice(0, 2000);
     const limit = maxAttempts ?? job.max_attempts;
@@ -122,25 +156,25 @@ export class JobQueue {
 
     if (canRetry) {
       const at = sqliteUtc(new Date(Date.now() + backoffMs(job.attempts)));
-      this.db.run(
+      await this.db.run(
         `UPDATE automation_jobs
             SET status='waiting_retry', last_error=?, error_kind=?, run_after=?,
                 lease_until=NULL, updated_at=datetime('now')
           WHERE id=?`,
-        message, kind, at, jobId
+        message, kind, at, jobId,
       );
-      this._history(jobId, 'retry', `attempt ${job.attempts}/${limit}: ${message}`);
+      await this._history(jobId, 'retry', `attempt ${job.attempts}/${limit}: ${message}`);
       return { retried: true, runAfter: at };
     }
 
-    this.db.run(
+    await this.db.run(
       `UPDATE automation_jobs
           SET status='failed', last_error=?, error_kind=?, finished_at=datetime('now'),
               lease_until=NULL, updated_at=datetime('now')
         WHERE id=?`,
-      message, kind, jobId
+      message, kind, jobId,
     );
-    this._history(jobId, 'failed', message);
+    await this._history(jobId, 'failed', message);
     log.warn(`job ${jobId} failed permanently`, { stage: job.stage, kind, message });
     return { retried: false };
   }
@@ -149,59 +183,59 @@ export class JobQueue {
    * Crash recovery: a job left `running` whose lease expired belonged to a
    * process that died. Requeue it (respecting the attempt budget).
    */
-  recoverStale() {
+  async recoverStale() {
     const now = nowSqlite();
-    const stale = this.db.all(
+    const stale = await this.db.all(
       `SELECT * FROM automation_jobs
         WHERE status='running' AND (lease_until IS NULL OR lease_until <= ?)`,
-      now
+      now,
     );
     let recovered = 0;
     for (const job of stale) {
       if (job.attempts < job.max_attempts) {
-        this.db.run(
+        await this.db.run(
           `UPDATE automation_jobs
               SET status='waiting_retry', lease_until=NULL, worker_id=NULL,
                   run_after=?, last_error='Recovered after worker interruption',
                   updated_at=datetime('now')
             WHERE id=?`,
-          now, job.id
+          now, job.id,
         );
-        this._history(job.id, 'recovered', 'lease expired; requeued');
+        await this._history(job.id, 'recovered', 'lease expired; requeued');
         recovered++;
       } else {
-        this.db.run(
+        await this.db.run(
           `UPDATE automation_jobs SET status='failed', lease_until=NULL,
                   last_error='Abandoned after worker interruption', finished_at=datetime('now'),
                   updated_at=datetime('now')
             WHERE id=?`,
-          job.id
+          job.id,
         );
-        this._history(job.id, 'failed', 'abandoned');
+        await this._history(job.id, 'failed', 'abandoned');
       }
     }
     if (recovered) log.info(`recovered ${recovered} interrupted job(s)`);
     return recovered;
   }
 
-    /**
+  /**
    * Cancel a single job, including one that is currently running. Used when a
    * mission is paused/stopped after the job was claimed, so the job cannot be
    * left stranded in `running`.
    */
-  cancel(jobId, reason = 'cancelled') {
-    this.db.run(
+  async cancel(jobId, reason = 'cancelled') {
+    await this.db.run(
       `UPDATE automation_jobs
           SET status='cancelled', last_error=?, lease_until=NULL, updated_at=datetime('now')
         WHERE id=?`,
-      reason, jobId
+      reason, jobId,
     );
-    this._history(jobId, 'cancelled', reason);
+    await this._history(jobId, 'cancelled', reason);
     return this.get(jobId);
   }
 
   /** Safe stop: cancel queued work for a mission without touching running work. */
-  cancelQueued({ missionId, userId = null, stages = null } = {}) {
+  async cancelQueued({ missionId, userId = null, stages = null } = {}) {
     const clauses = [`status IN ('queued','waiting_retry')`];
     const params = [];
     if (missionId) { clauses.push('mission_id = ?'); params.push(missionId); }
@@ -210,34 +244,34 @@ export class JobQueue {
       clauses.push(`stage IN (${stages.map(() => '?').join(',')})`);
       params.push(...stages);
     }
-    const rows = this.db.all(`SELECT id FROM automation_jobs WHERE ${clauses.join(' AND ')}`, ...params);
+    const rows = await this.db.all(`SELECT id FROM automation_jobs WHERE ${clauses.join(' AND ')}`, ...params);
     for (const r of rows) {
-      this.db.run(
+      await this.db.run(
         `UPDATE automation_jobs SET status='cancelled', lease_until=NULL, updated_at=datetime('now') WHERE id=?`,
-        r.id
+        r.id,
       );
-      this._history(r.id, 'cancelled', 'stopped by user or mission state');
+      await this._history(r.id, 'cancelled', 'stopped by user or mission state');
     }
     return rows.length;
   }
 
   /** Extend a lease for long-running work so recovery does not steal it. */
-  heartbeat(jobId, leaseMs = 10 * 60 * 1000) {
-    this.db.run(
+  async heartbeat(jobId, leaseMs = 10 * 60 * 1000) {
+    await this.db.run(
       `UPDATE automation_jobs SET lease_until=?, updated_at=datetime('now') WHERE id=? AND status='running'`,
-      sqliteUtc(new Date(Date.now() + leaseMs)), jobId
+      sqliteUtc(new Date(Date.now() + leaseMs)), jobId,
     );
   }
 
-  get(jobId) { return this.db.get('SELECT * FROM automation_jobs WHERE id = ?', jobId); }
+  async get(jobId) { return this.db.get('SELECT * FROM automation_jobs WHERE id = ?', jobId); }
 
-  stats({ userId = null, missionId = null } = {}) {
+  async stats({ userId = null, missionId = null } = {}) {
     const clauses = [];
     const params = [];
     if (userId) { clauses.push('user_id = ?'); params.push(userId); }
     if (missionId) { clauses.push('mission_id = ?'); params.push(missionId); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const rows = this.db.all(`SELECT status, COUNT(*) n FROM automation_jobs ${where} GROUP BY status`, ...params);
+    const rows = await this.db.all(`SELECT status, COUNT(*) n FROM automation_jobs ${where} GROUP BY status`, ...params);
     const out = Object.fromEntries(rows.map((r) => [r.status, r.n]));
     return {
       queued: out.queued || 0,
@@ -249,18 +283,38 @@ export class JobQueue {
     };
   }
 
-  recent({ userId, missionId = null, limit = 50 } = {}) {
+  async recent({ userId, missionId = null, limit = 50 } = {}) {
     if (missionId) {
       return this.db.all(
         `SELECT * FROM automation_jobs WHERE user_id=? AND mission_id=? ORDER BY id DESC LIMIT ?`,
-        userId, missionId, limit
+        userId, missionId, limit,
       );
     }
     return this.db.all('SELECT * FROM automation_jobs WHERE user_id=? ORDER BY id DESC LIMIT ?', userId, limit);
   }
 
-  history(jobId) {
+  async history(jobId) {
     return this.db.all('SELECT * FROM job_history WHERE job_id=? ORDER BY id ASC', jobId);
+  }
+
+  /**
+   * Jobs of a given stage that are due to run right now — used by the
+   * scheduler's producers (mailbox monitoring, follow-ups) and by the
+   * serverless tick endpoint.
+   */
+  async countRunnable({ userId = null, stages = null } = {}) {
+    const clauses = [`status IN ('queued','waiting_retry')`, 'run_after <= ?'];
+    const params = [nowSqlite()];
+    if (userId) { clauses.push('user_id = ?'); params.push(userId); }
+    if (stages && stages.length) {
+      clauses.push(`stage IN (${stages.map(() => '?').join(',')})`);
+      params.push(...stages);
+    }
+    const row = await this.db.get(
+      `SELECT COUNT(*) n FROM automation_jobs WHERE ${clauses.join(' AND ')}`,
+      ...params,
+    );
+    return row?.n || 0;
   }
 }
 

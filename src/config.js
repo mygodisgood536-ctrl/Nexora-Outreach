@@ -100,12 +100,42 @@ function resolveOpencodeBin() {
 
 const DATA_DIR = process.env.NEXORA_DATA_DIR || path.join(ROOT, '.data');
 
+/**
+ * OpenCode credentials. The same `OPENCODE_API_KEY` variable carries either:
+ *   • an OpenCode Cloud service-account key (`oc_sk_...`) — the production AI
+ *     runtime on Vercel; or
+ *   • the HTTP basic password of a self-hosted `opencode serve` instance.
+ * The `oc_sk_` prefix is the discriminator, so the cloud transport is selected
+ * automatically without a second secret.
+ */
+const OPENCODE_API_KEY = process.env.OPENCODE_API_KEY || process.env.OPENCODE_SERVER_PASSWORD || '';
+const OPENCODE_BASE_URL = (process.env.OPENCODE_BASE_URL || process.env.OPENCODE_SERVER_URL || '').trim().replace(/\/+$/, '');
+const OPENCODE_CLOUD_URL = (process.env.OPENCODE_CLOUD_URL || 'https://opencode.ai').trim().replace(/\/+$/, '');
+const OPENCODE_CONSOLE_URL = (process.env.OPENCODE_CONSOLE_URL || 'https://console.opencode.ai').trim().replace(/\/+$/, '');
+
+/**
+ * Production database: the Neon PostgreSQL instance connected through Vercel.
+ * Several Vercel/Neon templates expose the same DSN under different names, so
+ * all of them are accepted. When none is present the app falls back to the
+ * zero-install SQLite file (development + tests) — never to a local Postgres.
+ */
+const DATABASE_URL =
+  process.env.DATABASE_URL
+  || process.env.POSTGRES_URL
+  || process.env.POSTGRES_PRISMA_URL
+  || process.env.NEON_DATABASE_URL
+  || process.env.NEON_POSTGRES_URL
+  || '';
+
 export const config = {
   env,
   isProd,
   root: ROOT,
   dataDir: DATA_DIR,
   dbFile: process.env.NEXORA_DB_FILE || path.join(DATA_DIR, 'nexora.db'),
+  databaseUrl: DATABASE_URL,
+  dbDialect: DATABASE_URL ? 'postgres' : 'sqlite',
+  dbPoolMax: int('DB_POOL_MAX', 5),
   port: int('PORT', 4317),
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || `http://localhost:${int('PORT', 4317)}`).replace(/\/+$/, ''),
 
@@ -117,6 +147,35 @@ export const config = {
     bin: resolveOpencodeBin(),
     defaultModel: process.env.OPENCODE_DEFAULT_MODEL || 'opencode/space-bunny-free',
     timeoutMs: int('OPENCODE_TIMEOUT_MS', 180000),
+    maxTokens: int('OPENCODE_MAX_TOKENS', 4096),
+
+    /**
+     * Remote OpenCode (`opencode serve`). When a base URL is set the HTTP
+     * transport is used instead of spawning the binary — the only mode that
+     * works on serverless hosts such as Vercel.
+     */
+    baseUrl: OPENCODE_BASE_URL,
+    username: process.env.OPENCODE_SERVER_USERNAME || 'opencode',
+    // Sent as HTTP basic password. Never logged, never returned by an API.
+    password: OPENCODE_API_KEY,
+
+    /**
+     * OpenCode Cloud (the hosted Console product). This is the production AI
+     * runtime: one service-account key reaches OpenAI/Anthropic/Gemini-family
+     * models through a single gateway, and the provider/model catalog is
+     * discovered live from the workspace configuration.
+     *
+     * SECRET: `apiKey` is server-side only. It is never sent to the browser,
+     * logged, or returned by any endpoint (see OpenCodeCloudTransport.describe).
+     */
+    apiKey: OPENCODE_API_KEY,
+    cloudUrl: OPENCODE_CLOUD_URL,
+    consoleUrl: OPENCODE_CONSOLE_URL,
+
+    /** True when a Cloud service-account key is present. */
+    get cloud() { return /^oc_sk_/.test(OPENCODE_API_KEY); },
+    /** Transport selection: cloud > remote serve > local binary. */
+    get transport() { return this.cloud ? 'cloud' : (this.baseUrl ? 'http' : 'cli'); },
   },
 
   google: {
@@ -135,6 +194,25 @@ export const config = {
   discovery: {
     overpassUrl: process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter',
     googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY || '',
+  },
+
+  /**
+   * Shared secret for provider bounce/complaint webhooks (§17). When set,
+   * `POST /api/email/events` accepts a matching `X-Nexora-Webhook-Secret`
+   * header. Blank means only authenticated users can report delivery events.
+   */
+  webhook: {
+    secret: process.env.WEBHOOK_SECRET || '',
+  },
+
+  /**
+   * Serverless automation driver (§26). On a long-lived host the scheduler and
+   * worker run in-process; on Vercel a Cron hits `POST /api/cron/tick` instead,
+   * so the same pipeline advances without a persistent process.
+   */
+  cron: {
+    secret: process.env.CRON_SECRET || '',
+    maxJobs: int('CRON_MAX_JOBS', 50),
   },
 
   research: {

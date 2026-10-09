@@ -19,7 +19,7 @@ export async function discoveryHandler(ctx) {
   // Marks the mission visibly as running for the duration of this pass.
   const runDiscovery = mission.status === 'scheduled';
 
-  const location = payload.location || missions.locations(mission.id)[0];
+  const location = payload.location || (await missions.locations(mission.id))[0];
   if (!location) throw err.discovery('NO_TARGET', 'The mission has no target location configured.');
 
   const types = resolveBusinessTypes(
@@ -45,20 +45,20 @@ export async function discoveryHandler(ctx) {
   });
 
   // Mark the mission visibly as running for the duration of this pass.
-  if (runDiscovery) ctx.db.run("UPDATE missions SET status = 'running' WHERE id = ?", mission.id);
+  if (runDiscovery) await ctx.db.run("UPDATE missions SET status = 'running' WHERE id = ?", mission.id);
 
   let created = 0;
   let duplicates = 0;
   const leadIds = [];
   for (const candidate of candidates) {
-    const result = leads.createFromCandidate(job.user_id, mission.id, candidate);
+    const result = await leads.createFromCandidate(job.user_id, mission.id, candidate);
     if (!result.created) {
       if (result.reason === 'duplicate') duplicates++;
       continue;
     }
     created++;
     leadIds.push(result.lead.id);
-    queue.enqueue({
+    await queue.enqueue({
       userId: job.user_id,
       missionId: mission.id,
       stage: STAGE.RESEARCH,
@@ -67,7 +67,7 @@ export async function discoveryHandler(ctx) {
     });
   }
 
-  ctx.db.run(
+  await ctx.db.run(
     `UPDATE missions
         SET last_run_at = ?,
             next_run_at = ?,
@@ -76,7 +76,7 @@ export async function discoveryHandler(ctx) {
             -- 'running' forever (which would block its own follow-ups).
             status = CASE WHEN status = 'running' THEN 'scheduled' ELSE status END
       WHERE id = ?`,
-    nowSqlite(), missions.computeNextRun(mission, new Date()), mission.id
+    nowSqlite(), await missions.computeNextRun(mission, new Date()), mission.id
   );
 
   ctx.log.info(`discovery: ${created} new, ${duplicates} duplicate, ${candidates.length} returned`);
@@ -87,7 +87,7 @@ export async function discoveryHandler(ctx) {
 export async function researchHandler(ctx) {
   const { services, payload, job } = ctx;
   const { leads, queue } = services;
-  const lead = leads.get(payload.leadId);
+  const lead = await leads.get(payload.leadId);
   if (!lead) throw err.notFound('Lead');
 
   const enqueueAnalysis = (extra = {}) => queue.enqueue({
@@ -100,7 +100,7 @@ export async function researchHandler(ctx) {
 
   // §13: a missing website must not disqualify a business.
   if (!lead.website_url) {
-    leads.savePresenceAnalysis(lead.id, {
+    await leads.savePresenceAnalysis(lead.id, {
       evidence: {
         hasWebsite: false,
         discoverySource: lead.discovery_source,
@@ -118,8 +118,8 @@ export async function researchHandler(ctx) {
       score: null,
       method: 'discovery_metadata',
     });
-    leads.setStatus(lead.id, 'investigated');
-    enqueueAnalysis();
+    await leads.setStatus(lead.id, 'investigated');
+    await enqueueAnalysis();
     return { leadId: lead.id, hasWebsite: false };
   }
 
@@ -136,31 +136,31 @@ export async function researchHandler(ctx) {
   }
 
   if (!page) {
-    leads.saveWebsiteAnalysis(lead.id, {
+    await leads.saveWebsiteAnalysis(lead.id, {
       ok: false,
       url: lead.website_url,
       error: failure?.message || 'fetch failed',
       fetchedMs: Date.now() - startedAt,
     });
-    leads.setStatus(lead.id, 'investigated', { error: failure?.message });
+    await leads.setStatus(lead.id, 'investigated', { error: failure?.message });
     // The lead is still analysed so the AI can judge it from what we recorded.
-    enqueueAnalysis({ fetchFailed: true });
-    throw failure;
+    await enqueueAnalysis({ fetchFailed: true });
+    throw failure || new Error('fetch failed');
   }
 
   const evidence = extractWebsiteEvidence(page.body, {
     url: page.url, bytes: page.bytes, contentType: page.contentType,
   });
   const score = heuristicScore(evidence);
-  leads.saveWebsiteAnalysis(lead.id, {
+  await leads.saveWebsiteAnalysis(lead.id, {
     ok: true, url: page.url, evidence,
     findings: { heuristicScore: score },
     score, method: evidence.analysisMethod,
     fetchedMs: Date.now() - startedAt,
   });
-  leads.setStatus(lead.id, 'investigated');
-  ctx.heartbeat();
-  enqueueAnalysis();
+  await leads.setStatus(lead.id, 'investigated');
+  await ctx.heartbeat();
+  await enqueueAnalysis();
 
   return { leadId: lead.id, hasWebsite: true, bytes: page.bytes, score };
 }

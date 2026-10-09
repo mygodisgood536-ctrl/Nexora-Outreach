@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Nexora Outreach - AI-powered prospecting and outreach, on autopilot.",
-  "engines": { "node": ">=22.5.0" },
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
@@ -16,5 +18,7 @@
     "probe:discovery": "node scripts/probe-discovery.js",
     "migrate": "node scripts/migrate.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
 }

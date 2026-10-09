@@ -26,7 +26,7 @@ export async function mailboxMonitorHandler(ctx) {
 
   // Only replies from businesses we actually contacted are actionable.
   const mine = new Map();
-  for (const lead of leads.list(job.user_id, { limit: 1000 })) {
+  for (const lead of await leads.list(job.user_id, { limit: 1000 })) {
     const addr = normalizeEmail(lead.email_public);
     if (addr) mine.set(addr, lead);
   }
@@ -37,13 +37,13 @@ export async function mailboxMonitorHandler(ctx) {
     const lead = fromEmail ? mine.get(fromEmail) : null;
     if (!lead) continue;
 
-    const conversation = conversations.getFor(lead.id, lead.mission_id);
+    const conversation = await conversations.getFor(lead.id, lead.mission_id);
     if (!conversation || conversation.status === 'reply_received') continue;
 
-    conversations.recordReply(conversation.id, {
+    await conversations.recordReply(conversation.id, {
       providerMessageId: reply.providerMessageId, threadKey: reply.threadKey,
     });
-    leads.setStatus(lead.id, 'replied');
+    await leads.setStatus(lead.id, 'replied');
 
     let summary = reply.text ? String(reply.text).slice(0, 300) : '';
     try {
@@ -53,12 +53,12 @@ export async function mailboxMonitorHandler(ctx) {
         replyText: reply.text,
       });
       summary = triage.summary || summary;
-      if (triage.is_opt_out) conversations.recordOptOut(conversation.id, fromEmail);
+      if (triage.is_opt_out) await conversations.recordOptOut(conversation.id, fromEmail);
     } catch {
       // A triage failure must never block the reply notification.
     }
 
-    notifications.create(job.user_id, {
+    await notifications.create(job.user_id, {
       kind: 'reply', severity: 'critical',
       title: `New reply from ${lead.business_name}`,
       body: summary,
@@ -68,6 +68,7 @@ export async function mailboxMonitorHandler(ctx) {
   }
   return { checked: replies.length, replies: handled };
 }
+
 /**
  * §19 — generate and send a follow-up when it is due and every policy allows
  * it. A reply, opt-out, bounce, suppression, mission pause, or a sending mode
@@ -79,37 +80,37 @@ export async function followUpHandler(ctx) {
 
   const conversationId = payload.conversationId;
   if (!conversationId) throw err.validation('follow_up requires a conversationId');
-  const conversation = conversations.getById(conversationId);
+  const conversation = await conversations.getById(conversationId);
   if (!conversation) throw err.notFound('Conversation');
 
-  const cancel = (reason) => {
-    ctx.db.run(
+  const cancel = async (reason) => {
+    await ctx.db.run(
       "UPDATE follow_ups SET status = 'cancelled', reason_cancelled = ? WHERE conversation_id = ? AND status = 'pending'",
       reason, conversationId
     );
     return { conversationId, cancelled: reason };
   };
 
-  const pending = ctx.db.get(
+  const pending = await ctx.db.get(
     "SELECT * FROM follow_ups WHERE conversation_id = ? AND status = 'pending' ORDER BY due_at ASC LIMIT 1",
     conversationId
   );
   if (!pending) return { conversationId, skipped: 'no pending follow-up' };
   if (pending.due_at > sqliteUtc(new Date())) return { conversationId, skipped: 'not due' };
 
-  const missionRow = ctx.db.get('SELECT * FROM missions WHERE id = ?', pending.mission_id);
+  const missionRow = await ctx.db.get('SELECT * FROM missions WHERE id = ?', pending.mission_id);
   if (missionRow.status !== 'scheduled') return cancel(`mission_${missionRow.status}`);
   if (conversation.status === 'reply_received') return cancel('prospect replied');
   if (missionRow.sending_mode === 'scout_only') return cancel('scout_only');
 
-  const lead = leads.get(pending.lead_id);
+  const lead = await leads.get(pending.lead_id);
   if (!lead) return cancel('lead_missing');
 
   // Throws when the recipient is suppressed, bounced or complained about.
-  const to = conversations.assertSendable(job.user_id, pending.mission_id, lead, conversation.id);
+  const to = await conversations.assertSendable(job.user_id, pending.mission_id, lead, conversation.id);
 
-  const connection = emailStore.activeFor(job.user_id);
-  const evidence = leads.evidenceFor(lead.id);
+  const connection = await emailStore.activeFor(job.user_id);
+  const evidence = await leads.evidenceFor(lead.id);
   const draft = await ai.writeOutreach(job.user_id, {
     lead: evidence.lead,
     analysis: { website: evidence.website, presence: evidence.presence },
@@ -124,7 +125,7 @@ export async function followUpHandler(ctx) {
   });
 
   const key = sendKey(pending.mission_id, lead.id, 'follow_up', pending.sequence);
-  const { message } = conversations.createMessage({
+  const { message } = await conversations.createMessage({
     conversationId, leadId: lead.id, missionId: pending.mission_id,
     kind: 'follow_up', subject: draft.subject, bodyText: draft.body,
     model: draft.model, idempotencyKey: key,
@@ -137,18 +138,18 @@ export async function followUpHandler(ctx) {
   const result = await email.send(job.user_id, {
     to, subject: draft.subject, text: draft.body, idempotencyKey: key,
   });
-  conversations.markSent(message.id, {
+  await conversations.markSent(message.id, {
     provider: result.provider, providerMessageId: result.providerMessageId, idempotencyKey: key,
   });
-  ctx.db.run("UPDATE follow_ups SET status = 'sent', message_id = ? WHERE id = ?", message.id, pending.id);
-  ctx.db.run(
+  await ctx.db.run("UPDATE follow_ups SET status = 'sent', message_id = ? WHERE id = ?", message.id, pending.id);
+  await ctx.db.run(
     "UPDATE conversations SET followups_sent = followups_sent + 1, status = 'follow_up_sent', last_outbound_at = datetime('now') WHERE id = ?",
     conversationId
   );
-  conversations.recordSend(job.user_id, pending.mission_id, missionRow.timezone);
+  await conversations.recordSend(job.user_id, pending.mission_id, missionRow.timezone);
 
   // Only reschedule while within the configured maximum.
-  const next = conversations.scheduleFollowUp({
+  const next = await conversations.scheduleFollowUp({
     conversationId, leadId: lead.id, missionId: pending.mission_id, mission: missionRow,
   });
   return { conversationId, sent: true, sequence: pending.sequence, nextScheduled: Boolean(next?.created) };

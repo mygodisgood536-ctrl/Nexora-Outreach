@@ -49,35 +49,40 @@ export class WorkerRuntime {
    * A job whose mission is no longer running must not execute. Cancellation is
    * scoped to the stage so other stages keep running.
    */
-  blockReason(job) {
-    if (!job.mission_id) return null;
-    const mission = this.db.get('SELECT status FROM missions WHERE id = ?', job.mission_id);
+  async blockReason(job) {
+    if (!job.mission_id) {
+      const onlyUser = await this.db.get('SELECT automation_paused FROM users WHERE id = ?', job.user_id);
+      return onlyUser?.automation_paused ? 'automation_paused' : null;
+    }
+    const mission = await this.db.get('SELECT status FROM missions WHERE id = ?', job.mission_id);
     if (!mission) return 'mission_deleted';
     if (['paused', 'stopped', 'archived'].includes(mission.status)) return `mission_${mission.status}`;
-    const user = this.db.get('SELECT automation_paused FROM users WHERE id = ?', job.user_id);
+    const user = await this.db.get('SELECT automation_paused FROM users WHERE id = ?', job.user_id);
     if (user?.automation_paused) return 'automation_paused';
     return null;
   }
 
-  makeContext(job) {
-    const mission = job.mission_id ? this.db.get('SELECT * FROM missions WHERE id = ?', job.mission_id) : null;
+  async makeContext(job) {
+    const mission = job.mission_id
+      ? await this.db.get('SELECT * FROM missions WHERE id = ?', job.mission_id)
+      : null;
     return {
       db: this.db,
       queue: this.queue,
       job,
       payload: safeParse(job.payload),
       mission,
-      user: this.db.get('SELECT * FROM users WHERE id = ?', job.user_id),
+      user: await this.db.get('SELECT * FROM users WHERE id = ?', job.user_id),
       workerId: this.workerId,
       log: log.child(job.stage),
       services: this.services,
       heartbeat: () => this.queue.heartbeat(job.id, this.leaseMs),
-      isCancelled: () => Boolean(this.blockReason(job)),
+      isCancelled: async () => Boolean(await this.blockReason(job)),
     };
   }
 
-/** Split failures by kind so the UI can explain what went wrong (§30). */
-  recordFailure(ctx, error) {
+  /** Split failures by kind so the UI can explain what went wrong (§30). */
+  async recordFailure(ctx, error) {
     // Honour an explicit kind/retryable on ANY error object, not just
     // AppError. Otherwise a provider error carrying a permanent code would be
     // retried forever and would never raise the right notification.
@@ -90,23 +95,27 @@ export class WorkerRuntime {
       ? error.retryable
       : (error instanceof AppError ? error.retryable : true);
 
-    const result = this.queue.fail(ctx.job.id, error, { kind, retryable });
+    const result = await this.queue.fail(ctx.job.id, error, { kind, retryable });
     log.warn(`job ${ctx.job.id} (${ctx.job.stage}) failed`, { kind, retryable, message: error?.message });
 
     const notify = ctx.services?.notifications;
     if (notify) {
-      if (kind === ERROR_KIND.AI) {
-        notify.create(ctx.job.user_id, {
-          kind: 'ai_error', severity: 'warning',
-          title: 'AI step needs attention',
-          body: userFacingMessage(error), missionId: ctx.job.mission_id,
-        });
-      } else if (!retryable && ctx.job.mission_id) {
-        notify.create(ctx.job.user_id, {
-          kind: 'job_failed', severity: 'warning',
-          title: 'An automation step failed',
-          body: `${ctx.job.stage}: ${userFacingMessage(error)}`, missionId: ctx.job.mission_id,
-        });
+      try {
+        if (kind === ERROR_KIND.AI) {
+          await notify.create(ctx.job.user_id, {
+            kind: 'ai_error', severity: 'warning',
+            title: 'AI step needs attention',
+            body: userFacingMessage(error), missionId: ctx.job.mission_id,
+          });
+        } else if (!retryable && ctx.job.mission_id) {
+          await notify.create(ctx.job.user_id, {
+            kind: 'job_failed', severity: 'warning',
+            title: 'An automation step failed',
+            body: `${ctx.job.stage}: ${userFacingMessage(error)}`, missionId: ctx.job.mission_id,
+          });
+        }
+      } catch (e) {
+        log.warn('could not raise failure notification', { message: e?.message });
       }
     }
     return result;
@@ -120,34 +129,34 @@ export class WorkerRuntime {
     if (this._inFlight) return null;      // one job at a time per worker
     this._inFlight = true;
     try {
-      if (recover) this.queue.recoverStale();
-      const job = this.queue.claim(this.workerId, { leaseMs: this.leaseMs });
+      if (recover) await this.queue.recoverStale();
+      const job = await this.queue.claim(this.workerId, { leaseMs: this.leaseMs });
       if (!job) return null;
 
       const handler = this.handlers.get(job.stage);
       if (!handler) {
-        this.queue.fail(job.id, new Error(`No handler registered for stage "${job.stage}"`), {
+        await this.queue.fail(job.id, new Error(`No handler registered for stage "${job.stage}"`), {
           kind: ERROR_KIND.SYSTEM, retryable: false,
         });
         return this.queue.get(job.id);
       }
 
       // A mission paused or stopped after queueing must not keep executing.
-      const blocked = this.blockReason(job);
+      const blocked = await this.blockReason(job);
       if (blocked) {
         // `cancel` records the reason in job_history.
-        this.queue.cancel(job.id, blocked);
+        await this.queue.cancel(job.id, blocked);
         return this.queue.get(job.id);
       }
 
-      const ctx = this.makeContext(job);
+      const ctx = await this.makeContext(job);
       try {
         const result = await handler(ctx);
-        this.queue.complete(job.id, result === undefined ? null : result);
+        await this.queue.complete(job.id, result === undefined ? null : result);
         this.processed++;
         log.info(`job ${job.id} (${job.stage}) succeeded`, { missionId: job.mission_id });
       } catch (error) {
-        this.recordFailure(ctx, error);
+        await this.recordFailure(ctx, error);
       }
       return this.queue.get(job.id);
     } finally {
@@ -174,11 +183,13 @@ export class WorkerRuntime {
       while (this.running) {
         try {
           const job = await this.tick();
+          if (!this.running) break;
           if (!job) await this._sleep(this.pollMs);
         } catch (e) {
           log.error('worker loop error', { message: e?.message });
-          await this._sleep(this.pollMs);
         }
+        if (!this.running) break;
+        await this._sleep(this.pollMs);
       }
     };
     this._timer = loop();
@@ -189,6 +200,9 @@ export class WorkerRuntime {
    * a full poll interval before the loop notices it should exit.
    */
   _sleep(ms) {
+    // A stop() that lands while a tick is in flight would otherwise arm a full
+    // poll interval after the loop already decided to sleep.
+    if (!this.running) return Promise.resolve();
     return new Promise((resolve) => {
       const timer = setTimeout(() => { this._wake = null; resolve(); }, ms);
       this._wake = () => { clearTimeout(timer); this._wake = null; resolve(); };

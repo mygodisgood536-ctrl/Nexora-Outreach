@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { startTestServer, createClient, connectMailbox } from '../helpers/api.js';
@@ -39,58 +39,69 @@ async function signUp(base, username) {
  */
 async function runPipeline(system, base, { sendingMode = 'autopilot' } = {}) {
   const c = await signUp(base, 'ada');
-  connectMailbox(system.db, 1);
+  await connectMailbox(system.db, 1);
   const { body } = await c.post('/api/missions', { ...MISSION, sendingMode });
   const missionId = body.mission.id;
   await c.post(`/api/missions/${missionId}/activate`, {});
   await c.post(`/api/missions/${missionId}/run-now`, {});
   await system.worker.drain();
-  const lead = system.leads.list(1)[0];
+  const lead = (await system.leads.list(1))[0];
   return { c, missionId, lead };
 }
-// ── GAP-1: reject a drafted message (spec 21 user actions, 27) ─────────
+// â”€â”€ GAP-1: reject a drafted message (spec 21 user actions, 27) â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 test('api: rejecting a draft marks it rejected and records the reason', async () => {
   await withServer(async ({ system, base }) => {
     const { c, missionId } = await runPipeline(system, base, { sendingMode: 'review_send' });
-    const message = firstMessage(system, missionId);
+    const message = await firstMessage(system, missionId);
     assert.equal(message.send_status, 'draft', 'review_send holds the message for approval');
 
     const res = await c.post(`/api/messages/${message.id}/reject`, { reason: 'wrong tone for this prospect' });
     assert.equal(res.status, 200);
     assert.equal(res.body.message.send_status, 'rejected');
     assert.match(res.body.message.error, /wrong tone/);
-    assert.equal(system.conversations.message(message.id).send_status, 'rejected', 'persisted');
+    assert.equal((await system.conversations.message(message.id)).send_status, 'rejected', 'persisted');
   });
 });
 
 test('api: an already-sent message cannot be rejected', async () => {
   await withServer(async ({ system, base }) => {
     const { c, missionId } = await runPipeline(system, base);
-    const message = firstMessage(system, missionId);
+    const message = await firstMessage(system, missionId);
     assert.equal(message.send_status, 'sent');
 
     const res = await c.post(`/api/messages/${message.id}/reject`, {});
     assert.equal(res.status, 409);
     assert.equal(res.body.error, 'MESSAGE_ALREADY_SENT');
-    assert.equal(system.conversations.message(message.id).send_status, 'sent', 'history is not rewritten');
+    assert.equal((await system.conversations.message(message.id)).send_status, 'sent', 'history is not rewritten');
   });
 });
 
 test('api: one user cannot reject another user\'s message', async () => {
   await withServer(async ({ system, base }) => {
     const { missionId } = await runPipeline(system, base, { sendingMode: 'review_send' });
-    const message = firstMessage(system, missionId);
+    const message = await firstMessage(system, missionId);
 
     const grace = await signUp(base, 'grace');
     assert.equal((await grace.post(`/api/messages/${message.id}/reject`, {})).status, 404);
-    assert.equal(system.conversations.message(message.id).send_status, 'draft', 'unchanged');
+    assert.equal((await system.conversations.message(message.id)).send_status, 'draft', 'unchanged');
   });
 });
 
 test('api: rejecting a message requires a session and a CSRF token', async () => {
   await withServer(async ({ system, base }) => {
-// ── GAP-2: lead detail carries the whole prospect view (spec 21) ────────
+    const { missionId } = await runPipeline(system, base, { sendingMode: 'review_send' });
+    const message = await firstMessage(system, missionId);
+
+    const anon = createClient(base);
+    assert.equal((await anon.post(`/api/messages/${message.id}/reject`, {})).status, 401);
+
+    const c = await signUp(base, 'nocsrf');
+    c.clearCsrf();
+    assert.equal((await c.post(`/api/messages/${message.id}/reject`, {})).status, 403);
+    assert.equal((await system.conversations.message(message.id)).send_status, 'draft', 'unchanged');
+  });
+});
 
 test('api: lead detail includes message history, follow-ups and suppression status', async () => {
   await withServer(async ({ system, base }) => {
@@ -105,14 +116,14 @@ test('api: lead detail includes message history, follow-ups and suppression stat
     assert.equal(res.body.suppression.suppressed, false, 'not suppressed yet');
 
     // The values come from the services, not from a hard-coded shape.
-    const conversation = system.conversations.getFor(lead.id, lead.mission_id);
+    const conversation = await system.conversations.getFor(lead.id, lead.mission_id);
     assert.deepEqual(
       res.body.messages.map((m) => m.id),
-      system.conversations.messagesFor(conversation.id).map((m) => m.id)
+      (await system.conversations.messagesFor(conversation.id)).map((m) => m.id)
     );
 
     // Suppressing the recipient is reflected on the same screen.
-    system.suppression.addEmail(1, lead.email_public, 'asked to stop', 'manual');
+    await system.suppression.addEmail(1, lead.email_public, 'asked to stop', 'manual');
     const after = await c.get(`/api/leads/${lead.id}`);
     assert.equal(after.body.suppression.suppressed, true);
     assert.equal(after.body.suppression.scope, 'email');
@@ -129,7 +140,7 @@ test('api: one user cannot read another user\'s lead detail', async () => {
   });
 });
 
-// ── GAP-3: the dashboard reports every element of spec 20 ───────────────
+// â”€â”€ GAP-3: the dashboard reports every element of spec 20 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 test('api: the dashboard reports websites analyzed, messages, state and attention', async () => {
   await withServer(async ({ system, base }) => {
@@ -181,7 +192,7 @@ test('api: dashboard counts are isolated per user', async () => {
   });
 });
 
-// ── GAP-4: re-issue a recovery code while signed in (spec 5.3) ─────────
+// â”€â”€ GAP-4: re-issue a recovery code while signed in (spec 5.3) â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 test('api: a new recovery code can be issued and the old one stops working', async () => {
   await withServer(async ({ system, base }) => {
@@ -209,7 +220,7 @@ test('api: a new recovery code can be issued and the old one stops working', asy
     });
     assert.equal(ok.status, 200);
     assert.equal(ok.body.user.username, 'ada');
-    assert.equal(system.db.get('SELECT recovery_code_hash FROM users WHERE id = 1').recovery_code_hash.length, 64);
+    assert.equal((await system.db.get('SELECT recovery_code_hash FROM users WHERE id = 1')).recovery_code_hash.length, 64);
   });
 });
 
@@ -223,21 +234,9 @@ test('api: issuing a recovery code requires a session and a CSRF token', async (
     assert.equal((await c.post('/api/auth/recovery-code', {})).status, 403);
   });
 });
-    const { missionId } = await runPipeline(system, base, { sendingMode: 'review_send' });
-    const message = firstMessage(system, missionId);
-
-    const anon = createClient(base);
-    assert.equal((await anon.post(`/api/messages/${message.id}/reject`, {})).status, 401);
-
-    const c = await signUp(base, 'nocsrf');
-    c.clearCsrf();
-    assert.equal((await c.post(`/api/messages/${message.id}/reject`, {})).status, 403);
-    assert.equal(system.conversations.message(message.id).send_status, 'draft', 'unchanged');
-  });
-});
 
 /** The single message produced by a completed pipeline run. */
-function firstMessage(system, missionId) {
-  const conversation = system.conversations.getFor(system.leads.list(1)[0].id, missionId);
-  return system.conversations.messagesFor(conversation.id)[0];
+async function firstMessage(system, missionId) {
+  const conversation = await system.conversations.getFor((await system.leads.list(1))[0].id, missionId);
+  return (await system.conversations.messagesFor(conversation.id))[0];
 }

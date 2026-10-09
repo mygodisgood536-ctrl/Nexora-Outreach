@@ -17,7 +17,7 @@ const EDITABLE = new Set([
 export class MissionService {
   constructor({ db }) { this.db = db; }
 
-  create(userId, input = {}) {
+  async create(userId, input = {}) {
     const name = String(input.name || '').trim();
     if (!name) throw err.validation('Mission name is required.');
     const timezone = input.timezone || 'UTC';
@@ -26,7 +26,7 @@ export class MissionService {
       throw err.validation(`sending_mode must be one of ${SENDING_MODES.join(', ')}`);
     }
 
-    const id = this.db.run(
+    const result = await this.db.run(
       `INSERT INTO missions(user_id, name, objective_raw, service, offer_summary, target_description,
                            investigation_notes, outreach_instructions, sending_mode, timezone,
                            follow_up_delay_days, max_follow_ups, daily_send_limit, max_leads_per_run)
@@ -37,24 +37,25 @@ export class MissionService {
       input.sending_mode || 'scout_only', timezone,
       input.follow_up_delay_days ?? 2, input.max_follow_ups ?? 3,
       input.daily_send_limit ?? 20, input.max_leads_per_run ?? 25
-    ).lastInsertRowid;
+    );
+    const id = result.lastInsertRowid;
 
-    if (Array.isArray(input.windows)) this.setWindows(id, input.windows);
-    if (Array.isArray(input.locations)) this.setLocations(id, input.locations);
-    recordAudit(this.db, { userId, actor: 'user', action: 'mission.created', entityType: 'mission', entityId: id });
+    if (Array.isArray(input.windows)) await this.setWindows(id, input.windows);
+    if (Array.isArray(input.locations)) await this.setLocations(id, input.locations);
+    await recordAudit(this.db, { userId, actor: 'user', action: 'mission.created', entityType: 'mission', entityId: id });
     return this.get(id);
   }
 
-  get(id) { return this.db.get('SELECT * FROM missions WHERE id = ?', id); }
+  async get(id) { return this.db.get('SELECT * FROM missions WHERE id = ?', id); }
 
   /** Ownership check — every mission read/write goes through this. */
-  getForUser(id, userId) {
-    const m = this.get(id);
+  async getForUser(id, userId) {
+    const m = await this.get(id);
     if (!m || m.user_id !== userId) throw err.notFound('Mission');
     return m;
   }
 
-  list(userId, { includeArchived = false } = {}) {
+  async list(userId, { includeArchived = false } = {}) {
     return includeArchived
       ? this.db.all('SELECT * FROM missions WHERE user_id = ? ORDER BY id DESC', userId)
       : this.db.all(
@@ -62,33 +63,47 @@ export class MissionService {
       );
   }
 
-  update(id, patch = {}) {
+  async update(id, patch = {}) {
     if (patch.timezone && !isValidTimeZone(patch.timezone)) {
       throw err.validation(`Unknown timezone: ${patch.timezone}`);
     }
-    if (patch.sending_mode && !SENDING_MODES.includes(patch.sending_mode)) {
-      throw err.validation(`sending_mode must be one of ${SENDING_MODES.join(', ')}`);
+    if (patch.sending_mode !== undefined) {
+      if (patch.sending_mode === null || !SENDING_MODES.includes(patch.sending_mode)) {
+        throw err.validation(`sending_mode must be one of ${SENDING_MODES.join(', ')}`);
+      }
     }
+    const notNullFields = ['name', 'timezone', 'service', 'sending_mode'];
+    for (const field of notNullFields) {
+      if (field in patch && patch[field] === null) {
+        throw err.validation(`${field} cannot be empty.`);
+      }
+    }
+    // Free-text columns are the only ones a client may explicitly clear.
+    const nullableFields = new Set([
+      'objective_raw', 'offer_summary', 'target_description',
+      'investigation_notes', 'outreach_instructions',
+    ]);
     const fields = [];
     const params = [];
     for (const [key, value] of Object.entries(patch)) {
       if (!EDITABLE.has(key)) continue;
-      // An omitted field must not be bound: SQLite rejects `undefined`.
       if (value === undefined) continue;
+      if (value === null && !nullableFields.has(key)) continue; // null = leave unchanged
       fields.push(`${key} = ?`);
       params.push(value);
     }
     if (fields.length) {
-      this.db.run(
+      await this.db.run(
         `UPDATE missions SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ?`,
         ...params, id
       );
     }
-    if (Array.isArray(patch.windows)) this.setWindows(id, patch.windows);
-    if (Array.isArray(patch.locations)) this.setLocations(id, patch.locations);
+    if (Array.isArray(patch.windows)) await this.setWindows(id, patch.windows);
+    if (Array.isArray(patch.locations)) await this.setLocations(id, patch.locations);
     return this.get(id);
   }
-setWindows(missionId, windows) {
+
+  async setWindows(missionId, windows) {
     const clean = [];
     for (const w of windows) {
       const day = Number(w.dayOfWeek ?? w.day_of_week);
@@ -105,10 +120,10 @@ setWindows(missionId, windows) {
         end: ((end % 1440) + 1440) % 1440,
       });
     }
-    this.db.tx(() => {
-      this.db.run('DELETE FROM mission_windows WHERE mission_id = ?', missionId);
+    await this.db.tx(async () => {
+      await this.db.run('DELETE FROM mission_windows WHERE mission_id = ?', missionId);
       for (const w of clean) {
-        this.db.run(
+        await this.db.run(
           'INSERT INTO mission_windows(mission_id, day_of_week, start_min, end_min) VALUES(?,?,?,?)',
           missionId, w.day, w.start, w.end
         );
@@ -117,7 +132,7 @@ setWindows(missionId, windows) {
     return this.windows(missionId);
   }
 
-  windows(missionId) {
+  async windows(missionId) {
     return this.db.all(
       'SELECT day_of_week, start_min, end_min FROM mission_windows WHERE mission_id = ? ORDER BY day_of_week, start_min',
       missionId
@@ -125,17 +140,17 @@ setWindows(missionId, windows) {
   }
 
   /** Spec §9: country is first-class and always a real ISO code, never a vague region. */
-  setLocations(missionId, locations) {
+  async setLocations(missionId, locations) {
     const clean = locations.map((l) => {
       const country = normalizeCountry(l.country);
       if (!country) throw err.validation('Each target needs a two-letter ISO country code (e.g. US, DE, AE).');
       const priority = ['high', 'medium', 'low'].includes(l.priority) ? l.priority : 'medium';
       return { country, region: l.region || null, city: l.city || null, priority };
     });
-    this.db.tx(() => {
-      this.db.run('DELETE FROM target_locations WHERE mission_id = ?', missionId);
+    await this.db.tx(async () => {
+      await this.db.run('DELETE FROM target_locations WHERE mission_id = ?', missionId);
       for (const l of clean) {
-        this.db.run(
+        await this.db.run(
           'INSERT INTO target_locations(mission_id, country, region, city, priority) VALUES(?,?,?,?,?)',
           missionId, l.country, l.region, l.city, l.priority
         );
@@ -144,8 +159,7 @@ setWindows(missionId, windows) {
     return this.locations(missionId);
   }
 
-  locations(missionId) {
-    // Rank priority explicitly: alphabetical order would sort high < low < medium.
+  async locations(missionId) {
     return this.db.all(
       `SELECT id, country, region, city, priority FROM target_locations
         WHERE mission_id = ?
@@ -154,8 +168,10 @@ setWindows(missionId, windows) {
     );
   }
 
-  duplicate(id, userId) {
-    const src = this.getForUser(id, userId);
+  async duplicate(id, userId) {
+    const src = await this.getForUser(id, userId);
+    const windows = await this.windows(id);
+    const locations = await this.locations(id);
     return this.create(userId, {
       name: `${src.name} (copy)`,
       objective_raw: src.objective_raw,
@@ -164,90 +180,90 @@ setWindows(missionId, windows) {
       target_description: src.target_description,
       investigation_notes: src.investigation_notes,
       outreach_instructions: src.outreach_instructions,
-      // A duplicate always starts in the safest mode.
       sending_mode: 'scout_only',
       timezone: src.timezone,
       follow_up_delay_days: src.follow_up_delay_days,
       max_follow_ups: src.max_follow_ups,
       daily_send_limit: src.daily_send_limit,
       max_leads_per_run: src.max_leads_per_run,
-      windows: this.windows(id),
-      locations: this.locations(id),
+      windows,
+      locations,
     });
   }
 
-  _setStatus(id, status, extra = {}) {
+  async _setStatus(id, status, extra = {}) {
     const sets = ['status = ?', "updated_at = datetime('now')"];
     const params = [status];
     for (const [k, v] of Object.entries(extra)) { sets.push(`${k} = ?`); params.push(v); }
-    this.db.run(`UPDATE missions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
+    await this.db.run(`UPDATE missions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
   }
 
-  /** Activation requires a schedule and at least one target country. */
-  activate(id, userId) {
-    const m = this.getForUser(id, userId);
-    if (this.windows(id).length === 0) throw err.validation('Add at least one scouting window before activating.');
-    if (this.locations(id).length === 0) throw err.validation('Add at least one target country before activating.');
-    this._setStatus(id, 'scheduled', {
+  async activate(id, userId) {
+    const m = await this.getForUser(id, userId);
+    const windows = await this.windows(id);
+    const locations = await this.locations(id);
+    if (windows.length === 0) throw err.validation('Add at least one scouting window before activating.');
+    if (locations.length === 0) throw err.validation('Add at least one target country before activating.');
+    await this._setStatus(id, 'scheduled', {
       activated_at: nowSqlite(),
-      next_run_at: this.computeNextRun(m, new Date()),
+      next_run_at: await this.computeNextRun(m, new Date()),
     });
-    recordAudit(this.db, { userId, actor: 'user', action: 'mission.activated', entityType: 'mission', entityId: id });
+    await recordAudit(this.db, { userId, actor: 'user', action: 'mission.activated', entityType: 'mission', entityId: id });
     return this.get(id);
   }
 
-  pause(id, userId) {
-    this.getForUser(id, userId);
-    this._setStatus(id, 'paused');
-    recordAudit(this.db, { userId, actor: 'user', action: 'mission.paused', entityType: 'mission', entityId: id });
+  async pause(id, userId) {
+    await this.getForUser(id, userId);
+    await this._setStatus(id, 'paused');
+    await recordAudit(this.db, { userId, actor: 'user', action: 'mission.paused', entityType: 'mission', entityId: id });
     return this.get(id);
   }
 
-  resume(id, userId) {
-    const m = this.getForUser(id, userId);
-    this._setStatus(id, 'scheduled', { next_run_at: this.computeNextRun(m, new Date()) });
-    recordAudit(this.db, { userId, actor: 'user', action: 'mission.resumed', entityType: 'mission', entityId: id });
+  async resume(id, userId) {
+    const m = await this.getForUser(id, userId);
+    await this._setStatus(id, 'scheduled', { next_run_at: await this.computeNextRun(m, new Date()) });
+    await recordAudit(this.db, { userId, actor: 'user', action: 'mission.resumed', entityType: 'mission', entityId: id });
     return this.get(id);
   }
 
-  stop(id, userId) {
-    this.getForUser(id, userId);
-    this._setStatus(id, 'stopped');
-    recordAudit(this.db, { userId, actor: 'user', action: 'mission.stopped', entityType: 'mission', entityId: id });
+  async stop(id, userId) {
+    await this.getForUser(id, userId);
+    await this._setStatus(id, 'stopped');
+    await recordAudit(this.db, { userId, actor: 'user', action: 'mission.stopped', entityType: 'mission', entityId: id });
     return this.get(id);
   }
 
-  archive(id, userId) {
-    this.getForUser(id, userId);
-    this._setStatus(id, 'archived', { archived_at: nowSqlite() });
-    recordAudit(this.db, { userId, actor: 'user', action: 'mission.archived', entityType: 'mission', entityId: id });
+  async archive(id, userId) {
+    await this.getForUser(id, userId);
+    await this._setStatus(id, 'archived', { archived_at: nowSqlite() });
+    await recordAudit(this.db, { userId, actor: 'user', action: 'mission.archived', entityType: 'mission', entityId: id });
     return this.get(id);
   }
 
-  setInterpreted(id, interpreted, reviewed = false) {
-    this.db.run(
+  async setInterpreted(id, interpreted, reviewed = false) {
+    await this.db.run(
       "UPDATE missions SET interpreted_json = ?, interpreted_reviewed = ?, updated_at = datetime('now') WHERE id = ?",
       JSON.stringify(interpreted), reviewed ? 1 : 0, id
     );
     return this.get(id);
   }
 
-  /** Next moment the mission's scouting window opens (spec §10). */
-  computeNextRun(mission, from = new Date()) {
-    const windows = this.windows(mission.id);
+  async computeNextRun(mission, from = new Date()) {
+    const windows = await this.windows(mission.id);
     if (!windows.length) return null;
     const next = nextWindowStart(windows, from, mission.timezone);
     return next ? sqliteUtc(next) : null;
   }
 
-  isWithinWindow(mission, at = new Date()) {
-    const windows = this.windows(mission.id);
+  async isWithinWindow(mission, at = new Date()) {
+    const windows = await this.windows(mission.id);
     return windows.length > 0 && isWithinWindows(windows, at, mission.timezone);
   }
 
-  /** Shape sent to the client — never includes secrets. */
-  toPublic(mission) {
+  async toPublic(mission) {
     if (!mission) return null;
+    const windows = await this.windows(mission.id);
+    const locations = await this.locations(mission.id);
     return {
       id: mission.id,
       name: mission.name,
@@ -266,10 +282,10 @@ setWindows(missionId, windows) {
       maxLeadsPerRun: mission.max_leads_per_run,
       interpreted: mission.interpreted_json ? JSON.parse(mission.interpreted_json) : null,
       interpretedReviewed: Boolean(mission.interpreted_reviewed),
-      windows: this.windows(mission.id).map((w) => ({
+      windows: windows.map((w) => ({
         dayOfWeek: w.day_of_week, startMin: w.start_min, endMin: w.end_min,
       })),
-      locations: this.locations(mission.id),
+      locations,
       activatedAt: mission.activated_at,
       lastRunAt: mission.last_run_at,
       nextRunAt: mission.next_run_at,

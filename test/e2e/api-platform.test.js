@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
@@ -15,7 +15,7 @@ async function signedIn(base) {
   return c;
 }
 
-// ── AI settings (spec §7 / §31) ───────────────────────────────────
+// â”€â”€ AI settings (spec Â§7 / Â§31) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 test('api: AI settings expose the runtime catalog, not a hard-coded list', async () => {
   await withServer(async ({ base }) => {
@@ -56,7 +56,7 @@ test('api: AI diagnostics do not leak credentials', async () => {
   });
 });
 
-// ── Email connections (spec §6) ──────────────────────────────────
+// â”€â”€ Email connections (spec Â§6) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 test('api: email connections report provider availability without secrets', async () => {
   await withServer(async ({ base }) => {
@@ -176,7 +176,7 @@ test('api: the redirect URI is derived from the configured public base URL', asy
   });
 });
 
-// ── Protocol behaviour ───────────────────────────────────────────
+// â”€â”€ Protocol behaviour â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 test('api: unknown routes 404, wrong methods 405, bad ids 422', async () => {
   await withServer(async ({ base }) => {
@@ -214,7 +214,7 @@ test('api: the dashboard summarises only the caller\'s data', async () => {
       windows: [{ dayOfWeek: 1, startMin: '10:00', endMin: '13:00' }],
       locations: [{ country: 'US', city: 'Austin' }],
     });
-    connectMailbox(system.db, 1);   // otherwise the pipeline stops before outreach
+    await connectMailbox(system.db, 1);   // otherwise the pipeline stops before outreach
     await ada.post(`/api/missions/${body.mission.id}/run-now`, {});
     await system.worker.drain();
 
@@ -236,7 +236,7 @@ test('api: automation can be paused globally through the API', async () => {
   await withServer(async ({ system, base }) => {
     const c = await signedIn(base);
     assert.equal((await c.post('/api/auth/automation-paused', { paused: true })).body.user.automationPaused, true);
-    assert.equal(system.db.get('SELECT automation_paused FROM users WHERE id = 1').automation_paused, 1);
+    assert.equal((await system.db.get('SELECT automation_paused FROM users WHERE id = 1')).automation_paused, 1);
     assert.equal((await c.get('/api/dashboard')).body.automationPaused, true);
     assert.equal((await c.post('/api/auth/automation-paused', { paused: false })).body.user.automationPaused, false);
   });

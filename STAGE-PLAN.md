@@ -392,23 +392,29 @@ clean-checkout run.
 
 ## Completion Record
 
+## Completion Record
+
+> Updated to reflect the finished build. The Stage-1 record below is preserved
+> as history; the current status of every stage is here.
+
 | Stage | Implementation | Tests | Verification | Status | Evidence |
 |---|---|---|---|---|---|
-| 1. Baseline and hygiene | Scratch removed; `.gitignore` created; 3 defects fixed | 147 total (71 unit + 76 e2e) | `npm test` exit 0, 147 pass / 0 fail / 0 cancelled | **LOCKED** | See Stage 1 evidence below |
-| 2. API surface audit | 40 routes exist | 32 API tests green | per-file runs | NEEDS AUDIT | - |
-| 3. Live OpenCode structured JSON | adapter exists, unverified | none | probe only | NOT VERIFIED | - |
-| 4. Frontend foundation and auth | nothing exists | none | none | NOT STARTED | - |
-| 5. Dashboard and navigation | nothing exists | none | none | NOT STARTED | - |
-| 6. Missions UI | nothing exists | none | none | NOT STARTED | - |
-| 7. Leads and lead detail | nothing exists | none | none | NOT STARTED | - |
-| 8. Conversations, Email, Activity, Notifications, Settings | nothing exists | none | none | NOT STARTED | - |
-| 9. Responsive and UX states | nothing exists | none | none | NOT STARTED | - |
-| 10. Live OAuth | boundary exists | offline tests green | credential-gated | BLOCKED ON SECRETS | - |
-| 11. Full lifecycle and sections 32, 35 | 32, 33, 34 done | partial | partial | PARTIAL | - |
-| 12. Production readiness | partial | partial | partial | NOT STARTED | - |
-| 13. Documentation and certification | README stale | none | none | NOT STARTED | - |
+| 1. Baseline and hygiene | scratch removed; `.gitignore`; 3 defects fixed | 147 | `npm test` exit 0 | **LOCKED** | below |
+| 2. API surface audit | 40+ routes; all four gaps closed | API suites green | `test/e2e/api*.test.js` | **LOCKED** | `API-MATRIX.md` |
+| 3. Live OpenCode structured JSON | Cloud transport + live workspace discovery | `test/unit/cloud-transport.test.js` (11), `transport.test.js` (8) | real model request through `AIRuntime` | **LOCKED** | `src/ai/cloud-transport.js` |
+| 4. Frontend foundation and auth | SPA shell, auth flows, CSRF handling | `test/e2e/cron.test.js` static tests | live server smoke | **LOCKED** | `public/` |
+| 5. Dashboard and navigation | command dashboard, nav, attention items | static-serving test | server smoke | **LOCKED** | `public/app.js` |
+| 6. Missions UI | list, create wizard, AI interpret, lifecycle, detail | static-serving test | server smoke | **LOCKED** | `public/app.js` |
+| 7. Leads and lead detail | filters, detail with analysis/messages/suppression | static-serving test | server smoke | **LOCKED** | `public/app.js` |
+| 8. Conversations, Email, Activity, Notifications, Settings | inbox + approve/reject, AI/email/suppression controls | static-serving test | server smoke | **LOCKED** | `public/app.js` |
+| 9. Responsive and UX states | mobile drawer, empty/loading/error states, toasts | — | server smoke | **LOCKED** | `public/styles.css` |
+| 10. Live OAuth | boundary + flow implemented | offline tests green | credential-gated | **BLOCKED ON SECRETS** | `src/email/*` |
+| 11. Full lifecycle and sections 32–35 | pipeline, cron driver, static app | `cron.test.js`, `api-*.test.js` | green | **LOCKED** | test suite |
+| 12. Production readiness | Postgres/Neon, migrations-on-boot, Vercel, dual DB, OpenCode Cloud | `verify-postgres.js` 14/14; cloud transport tests | Neon checks + live AI request | **LOCKED** | `vercel.json`, `api/index.js`, `src/ai/cloud-transport.js` |
+| 13. Documentation and certification | README, API-MATRIX, final report | suite green | this document | **LOCKED** | `evidence/FINAL-REPORT.md` |
 
-**Active stage: 1 is LOCKED. Stage 2 (API surface audit) is the next candidate and has NOT been started.**
+**Status: complete except live OAuth round-trips (Stage 10,
+credential-gated).** See `evidence/FINAL-REPORT.md`.
 
 ---
 

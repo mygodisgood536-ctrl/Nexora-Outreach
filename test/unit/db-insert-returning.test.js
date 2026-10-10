@@ -46,3 +46,17 @@ test('any INSERT read via lastInsertRowid ends with RETURNING id (postgres)', ()
     `INSERTs read via lastInsertRowid must end with RETURNING id, otherwise Postgres returns no row:\n${offenders.join('\n')}`,
   );
 });
+
+// Epoch-millisecond columns hold Date.now() (~1.76e12), which overflows a
+// PostgreSQL 32-bit INTEGER (max ~2.1e9). They must be BIGINT, or the write
+// path 500s on the first insert. SQLite's INTEGER is 64-bit so it hides this.
+test('epoch-ms columns are BIGINT in schema.postgres.sql', () => {
+  const schema = readFileSync(join(SRC, 'db', 'schema.postgres.sql'), 'utf8');
+  const problems = [];
+  for (const column of ['created_ms', 'window_start_ms']) {
+    const line = schema.split('\n').find((l) => new RegExp(`^\\s*${column}\\s`).test(l));
+    if (!line) problems.push(`${column}: column not found`);
+    else if (!/\bBIGINT\b/.test(line)) problems.push(`${column}: must be BIGINT, got "${line.trim()}"`);
+  }
+  assert.deepEqual(problems, [], problems.join('\n'));
+});

@@ -20,10 +20,22 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const txStore = new AsyncLocalStorage();
 
 /** Bumped whenever schema.sql / schema.postgres.sql change. */
-export const SCHEMA_VERSION = '3';
+export const SCHEMA_VERSION = '4';
 
 /** Arbitrary but stable advisory-lock key guarding schema application. */
 const SCHEMA_LOCK_ID = 728_190_431;
+
+/**
+ * Idempotent, dialect-native upgrades replayed after the base DDL whenever the
+ * stored schema version is stale. PostgreSQL is the only target that needs them
+ * because it enforces integer widths: these epoch-millisecond columns were first
+ * created as 32-bit `INTEGER`, which overflows at ~2.1e9 while `Date.now()` is
+ * ~1.76e12. Widening to BIGINT is a no-op on fresh databases.
+ */
+const POSTGRES_UPGRADES = [
+  'ALTER TABLE users ALTER COLUMN created_ms TYPE BIGINT',
+  'ALTER TABLE api_rate_limits ALTER COLUMN window_start_ms TYPE BIGINT',
+];
 
 export class Db {
   constructor(driver) {
@@ -119,6 +131,7 @@ export class Db {
       await this.tx(async () => {
         await this.run('SELECT pg_advisory_xact_lock(?)', SCHEMA_LOCK_ID);
         await this.exec(ddl);
+        for (const upgrade of POSTGRES_UPGRADES) await this.exec(upgrade);
         await this._writeSchemaVersion();
       });
     } else {

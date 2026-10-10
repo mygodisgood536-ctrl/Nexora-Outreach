@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS users (
   locked_until      TEXT,                      -- progressive lockout (Â§5.3)
   automation_paused INTEGER NOT NULL DEFAULT 0, -- "Pause All Automation" (Â§26)
   timezone          TEXT    NOT NULL DEFAULT 'UTC',
-  created_ms        INTEGER NOT NULL DEFAULT 0,
+  created_ms        BIGINT NOT NULL DEFAULT 0,   -- epoch milliseconds (postgres int4 overflows ~2.1e9)
   deleted_at        TEXT
 );
 
@@ -408,7 +408,7 @@ CREATE TABLE IF NOT EXISTS meta (
 -- budget for the same key. Written by a single atomic upsert.
 CREATE TABLE IF NOT EXISTS api_rate_limits (
   key             TEXT    PRIMARY KEY,
-  window_start_ms INTEGER NOT NULL,
+  window_start_ms BIGINT NOT NULL,               -- epoch milliseconds
   count           INTEGER NOT NULL DEFAULT 0,
   updated_at      TEXT    NOT NULL DEFAULT (to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS'))
 );

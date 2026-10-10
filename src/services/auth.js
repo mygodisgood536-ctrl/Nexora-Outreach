@@ -98,7 +98,8 @@ export class AuthService {
       const r = await this.db.run(
         `INSERT INTO users(full_name, username, username_lower, security_question,
                            recovery_code_hash, timezone, created_ms)
-         VALUES(?,?,?,?,?,?,?)`,
+         VALUES(?,?,?,?,?,?,?)
+         RETURNING id`,
         String(fullName).trim(), username, username.toLowerCase(), securityQuestion,
         recovery.hash_hex, timezone, Date.now(),
       );

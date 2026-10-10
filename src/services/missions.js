@@ -30,7 +30,8 @@ export class MissionService {
       `INSERT INTO missions(user_id, name, objective_raw, service, offer_summary, target_description,
                            investigation_notes, outreach_instructions, sending_mode, timezone,
                            follow_up_delay_days, max_follow_ups, daily_send_limit, max_leads_per_run)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       RETURNING id`,
       userId, name, input.objective_raw ?? null, input.service || 'other',
       input.offer_summary ?? null, input.target_description ?? null,
       input.investigation_notes ?? null, input.outreach_instructions ?? null,

@@ -30,7 +30,8 @@ export class NotificationService {
 
     const result = await this.db.run(
       `INSERT INTO notifications(user_id, kind, severity, title, body, mission_id, lead_id)
-       VALUES(?,?,?,?,?,?,?)`,
+       VALUES(?,?,?,?,?,?,?)
+       RETURNING id`,
       userId, kind, SEVERITY[severity] || 'info', title, body, missionId, leadId
     );
     const id = result.lastInsertRowid;

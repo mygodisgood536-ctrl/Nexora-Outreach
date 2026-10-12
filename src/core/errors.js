@@ -29,6 +29,9 @@ const PERMANENT = new Set([
   'MAILBOX_NOT_CONNECTED',
   'MAILBOX_AUTH_EXPIRED',
   'RATE_LIMITED_PERMANENT',
+  // A campaign whose end date has passed must not be retried; the mission is
+  // simply finished (spec §10).
+  'CAMPAIGN_ENDED',
   // An exhausted API rate budget must not be hammered by the retry loop; the
   // limiter's own window already defines when it becomes eligible again.
   'RATE_LIMITED',
@@ -44,6 +47,11 @@ const TRANSIENT = new Set([
   'AI_PROVIDER_ERROR',
   'PROVIDER_TEMPORARY',
   'LOCKED',
+  // Sending-limit pauses are transient: the window resets and the job retries.
+  'HOURLY_LIMIT_REACHED',
+  'PACING_WAIT',
+  'CAMPAIGN_NOT_STARTED',
+  'RECIPIENT_COOLDOWN',
   // A discovery source rate-limiting or timing out is transient; the job
   // should back off and try again rather than fail permanently.
   'DISCOVERY_HTTP_ERROR',
@@ -102,6 +110,12 @@ export function userFacingMessage(error) {
       case 'AI_TIMEOUT': return 'The AI step timed out and will be retried.';
       case 'TIMEOUT': return 'A network request timed out.';
       case 'HTTP_429': return 'A provider rate limit was reached. Work will resume automatically.';
+      case 'DAILY_LIMIT_REACHED': return 'The daily sending limit is reached. Sending resumes tomorrow.';
+      case 'HOURLY_LIMIT_REACHED': return 'The hourly sending limit is reached. Sending pauses and resumes shortly.';
+      case 'PACING_WAIT': return 'Pacing delay between messages is in effect. Sending resumes shortly.';
+      case 'CAMPAIGN_NOT_STARTED': return 'This campaign has not reached its start date yet.';
+      case 'CAMPAIGN_ENDED': return 'This campaign\'s end date has passed, so nothing was sent.';
+      case 'RECIPIENT_COOLDOWN': return 'This recipient was contacted recently; the cooldown prevents over-contacting them.';
       case 'DISCOVERY_HTTP_ERROR': return 'The discovery source is busy or rate limiting. This run will retry automatically.';
       case 'DISCOVERY_QUERY_REJECTED': return 'The discovery query was rejected. Check the mission location and try again.';
       case 'HTTP_403': return 'Access was refused by the remote host.';

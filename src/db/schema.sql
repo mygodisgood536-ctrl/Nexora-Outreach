@@ -115,6 +115,10 @@ CREATE TABLE IF NOT EXISTS missions (
   follow_up_delay_days INTEGER NOT NULL DEFAULT 2,
   max_follow_ups       INTEGER NOT NULL DEFAULT 3,
   daily_send_limit     INTEGER NOT NULL DEFAULT 20,
+  hourly_send_limit    INTEGER NOT NULL DEFAULT 0,   -- 0 = only the daily limit applies
+  min_seconds_between_sends INTEGER NOT NULL DEFAULT 0, -- pacing floor between two sends
+  campaign_start_at    TEXT,                          -- optional scheduling window (§10/§27)
+  campaign_end_at      TEXT,
   max_leads_per_run    INTEGER NOT NULL DEFAULT 25,
   status               TEXT    NOT NULL DEFAULT 'draft',
   activated_at         TEXT,

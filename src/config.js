@@ -238,6 +238,9 @@ export const config = {
 
   limits: {
     globalMaxSendsPerDay: int('GLOBAL_MAX_SENDS_PER_DAY', 50),
+    globalMaxSendsPerHour: int('GLOBAL_MAX_SENDS_PER_HOUR', 0),
+    globalMinSecondsBetweenSends: int('GLOBAL_MIN_SECONDS_BETWEEN_SENDS', 0),
+    recipientCooldownDays: int('RECIPIENT_COOLDOWN_DAYS', 0),
     defaultMaxFollowUps: int('DEFAULT_MAX_FOLLOW_UPS', 3),
     defaultFollowUpDelayDays: int('DEFAULT_FOLLOW_UP_DELAY_DAYS', 2),
   },

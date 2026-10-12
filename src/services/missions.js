@@ -12,6 +12,7 @@ const EDITABLE = new Set([
   'name', 'objective_raw', 'service', 'offer_summary', 'target_description',
   'investigation_notes', 'outreach_instructions', 'sending_mode', 'timezone',
   'follow_up_delay_days', 'max_follow_ups', 'daily_send_limit', 'max_leads_per_run',
+  'hourly_send_limit', 'min_seconds_between_sends', 'campaign_start_at', 'campaign_end_at',
 ]);
 
 export class MissionService {
@@ -28,16 +29,19 @@ export class MissionService {
 
     const result = await this.db.run(
       `INSERT INTO missions(user_id, name, objective_raw, service, offer_summary, target_description,
-                           investigation_notes, outreach_instructions, sending_mode, timezone,
-                           follow_up_delay_days, max_follow_ups, daily_send_limit, max_leads_per_run)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             investigation_notes, outreach_instructions, sending_mode, timezone,
+                             follow_up_delay_days, max_follow_ups, daily_send_limit, max_leads_per_run,
+                             hourly_send_limit, min_seconds_between_sends, campaign_start_at, campaign_end_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        RETURNING id`,
       userId, name, input.objective_raw ?? null, input.service || 'other',
       input.offer_summary ?? null, input.target_description ?? null,
       input.investigation_notes ?? null, input.outreach_instructions ?? null,
       input.sending_mode || 'scout_only', timezone,
       input.follow_up_delay_days ?? 2, input.max_follow_ups ?? 3,
-      input.daily_send_limit ?? 20, input.max_leads_per_run ?? 25
+      input.daily_send_limit ?? 20, input.max_leads_per_run ?? 25,
+      input.hourly_send_limit ?? 0, input.min_seconds_between_sends ?? 0,
+      input.campaign_start_at ?? null, input.campaign_end_at ?? null
     );
     const id = result.lastInsertRowid;
 
@@ -187,6 +191,10 @@ export class MissionService {
       max_follow_ups: src.max_follow_ups,
       daily_send_limit: src.daily_send_limit,
       max_leads_per_run: src.max_leads_per_run,
+      hourly_send_limit: src.hourly_send_limit,
+      min_seconds_between_sends: src.min_seconds_between_sends,
+      campaign_start_at: src.campaign_start_at,
+      campaign_end_at: src.campaign_end_at,
       windows,
       locations,
     });
@@ -280,6 +288,10 @@ export class MissionService {
       followUpDelayDays: mission.follow_up_delay_days,
       maxFollowUps: mission.max_follow_ups,
       dailySendLimit: mission.daily_send_limit,
+      hourlySendLimit: mission.hourly_send_limit,
+      minSecondsBetweenSends: mission.min_seconds_between_sends,
+      campaignStartAt: mission.campaign_start_at,
+      campaignEndAt: mission.campaign_end_at,
       maxLeadsPerRun: mission.max_leads_per_run,
       interpreted: mission.interpreted_json ? JSON.parse(mission.interpreted_json) : null,
       interpretedReviewed: Boolean(mission.interpreted_reviewed),

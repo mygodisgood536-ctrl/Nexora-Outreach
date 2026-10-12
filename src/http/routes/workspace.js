@@ -39,6 +39,10 @@ export function registerWorkspaceRoutes(router, system) {
       max_follow_ups: body.maxFollowUps ?? 3,
       daily_send_limit: body.dailySendLimit ?? 20,
       max_leads_per_run: body.maxLeadsPerRun ?? 25,
+      hourly_send_limit: body.hourlySendLimit ?? 0,
+      min_seconds_between_sends: body.minSecondsBetweenSends ?? 0,
+      campaign_start_at: body.campaignStartAt ?? null,
+      campaign_end_at: body.campaignEndAt ?? null,
       windows: body.windows,
       locations: body.locations,
     });
@@ -89,6 +93,10 @@ export function registerWorkspaceRoutes(router, system) {
       max_follow_ups: body.maxFollowUps,
       daily_send_limit: body.dailySendLimit,
       max_leads_per_run: body.maxLeadsPerRun,
+      hourly_send_limit: body.hourlySendLimit,
+      min_seconds_between_sends: body.minSecondsBetweenSends,
+      campaign_start_at: body.campaignStartAt,
+      campaign_end_at: body.campaignEndAt,
       windows: body.windows,
       locations: body.locations,
     });

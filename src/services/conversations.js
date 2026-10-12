@@ -61,8 +61,116 @@ export class ConversationService {
 
   async assertSendable(userId, missionId, lead, conversationId = null) {
     const email = await this.assertNotSuppressed(userId, lead, conversationId);
-    await this.assertWithinDailyLimit(userId, missionId);
+    const mission = await this.db.get('SELECT * FROM missions WHERE id = ?', missionId);
+    if (mission) {
+      await this.assertWithinCampaignWindow(mission);
+      await this.assertWithinDailyLimit(userId, missionId, mission.timezone);
+      await this.assertWithinHourlyLimit(userId, missionId);
+      await this.assertBetweenSends(userId, missionId, mission);
+    }
+    await this.assertRecipientCooldown(userId, lead);
     return email;
+  }
+
+  /** Count messages actually sent for a mission (or a user) since an instant. */
+  async sentCount({ userId = null, missionId = null, sinceIso = null } = {}) {
+    const where = ["send_status = 'sent'"];
+    const params = [];
+    if (missionId != null) { where.push('mission_id = ?'); params.push(missionId); }
+    else if (userId != null) {
+      where.push('mission_id IN (SELECT id FROM missions WHERE user_id = ?)');
+      params.push(userId);
+    }
+    if (sinceIso) { where.push('sent_at >= ?'); params.push(sinceIso); }
+    const row = await this.db.get(
+      `SELECT count(*) AS c FROM outreach_messages WHERE ${where.join(' AND ')}`, ...params
+    );
+    return Number(row?.c || 0);
+  }
+
+  /**
+   * §10 campaign window: a mission with explicit start/end dates only sends
+   * between them. Not-yet-started is transient (retry later); ended is final.
+   */
+  async assertWithinCampaignWindow(mission, at = new Date()) {
+    const now = sqliteUtc(at);
+    if (mission.campaign_start_at && now < mission.campaign_start_at) {
+      throw err.email('CAMPAIGN_NOT_STARTED', `This campaign starts on ${mission.campaign_start_at} (UTC).`);
+    }
+    if (mission.campaign_end_at && now > mission.campaign_end_at) {
+      throw err.email('CAMPAIGN_ENDED', `This campaign ended on ${mission.campaign_end_at} (UTC).`);
+    }
+  }
+
+  /** §10 hourly rate limit: the mission's own cap and/or the global cap. */
+  async assertWithinHourlyLimit(userId, missionId, at = new Date()) {
+    const now = at.getTime();
+    const sinceIso = sqliteUtc(new Date(now - 3_600_000));
+    const mission = await this.db.get('SELECT hourly_send_limit, timezone FROM missions WHERE id = ?', missionId);
+    const missionCap = Number(mission?.hourly_send_limit || 0);
+    const globalCap = Number(this.config?.limits?.globalMaxSendsPerHour || 0);
+    if (missionCap > 0) {
+      const used = await this.sentCount({ missionId, sinceIso });
+      if (used >= missionCap) {
+        throw err.email('HOURLY_LIMIT_REACHED', `This mission's hourly limit of ${missionCap} message(s) is reached.`);
+      }
+    }
+    if (globalCap > 0) {
+      const used = await this.sentCount({ userId, sinceIso });
+      if (used >= globalCap) {
+        throw err.email('HOURLY_LIMIT_REACHED', `The hourly sending limit of ${globalCap} message(s) is reached.`);
+      }
+    }
+  }
+
+  /**
+   * §10 pacing: enforce a minimum gap between two sends in a mission. The
+   * effective floor is the larger of the mission's own value and the global
+   * default, so either layer can slow delivery down.
+   */
+  async assertBetweenSends(userId, missionId, mission = null, at = new Date()) {
+    const m = mission || await this.db.get('SELECT min_seconds_between_sends FROM missions WHERE id = ?', missionId);
+    const seconds = Math.max(
+      Number(m?.min_seconds_between_sends || 0),
+      Number(this.config?.limits?.globalMinSecondsBetweenSends || 0),
+    );
+    if (seconds <= 0) return;
+    const last = await this.db.get(
+      `SELECT sent_at FROM outreach_messages
+        WHERE mission_id = ? AND send_status = 'sent' AND sent_at IS NOT NULL
+        ORDER BY sent_at DESC LIMIT 1`,
+      missionId
+    );
+    if (!last?.sent_at) return;
+    const lastMs = new Date(`${String(last.sent_at).replace(' ', 'T')}Z`).getTime();
+    if (!Number.isFinite(lastMs)) return;
+    const waitMs = seconds * 1000 - (at.getTime() - lastMs);
+    if (waitMs > 0) {
+      throw err.email('PACING_WAIT', `Pacing limit: ${Math.ceil(waitMs / 1000)}s until the next send is allowed.`);
+    }
+  }
+
+  /**
+   * §10 recipient cooldown: never re-contact the same address within the
+   * configured window, even across missions (opt-in via config).
+   */
+  async assertRecipientCooldown(userId, lead, at = new Date()) {
+    const days = Number(this.config?.limits?.recipientCooldownDays || 0);
+    if (days <= 0) return;
+    const email = normalizeEmail(lead?.email_public);
+    if (!email) return;
+    const cutoff = sqliteUtc(new Date(at.getTime() - days * 86_400_000));
+    const row = await this.db.get(
+      `SELECT om.id FROM outreach_messages om
+         JOIN leads l ON l.id = om.lead_id
+        WHERE l.user_id = ? AND lower(l.email_public) = ?
+          AND om.send_status = 'sent' AND om.sent_at >= ?
+        LIMIT 1`,
+      userId, email, cutoff
+    );
+    if (row) {
+      throw err.email('RECIPIENT_COOLDOWN', `This recipient was contacted within the last ${days} day(s); cooldown applies.`);
+    }
   }
 
   todayKey(tz = 'UTC') {

@@ -475,11 +475,20 @@ function openMissionModal(prefill = {}) {
       <div class="section-head" style="margin-top:16px"><h2>Send windows</h2><button type="button" class="btn small" data-act="add-win">+ Add</button></div>
       <div id="win-list">${wins.map((w) => winRow(w)).join('')}</div>
 
-      <div class="section-head" style="margin-top:16px"><h2>Limits</h2></div>
+      <div class="section-head" style="margin-top:16px"><h2>Limits &amp; pacing</h2></div>
       <div class="grid cols-3">
         <div><label class="small muted">Follow-up delay (days)</label><input name="followUpDelayDays" type="number" min="0" value="${esc(m.followUpDelayDays ?? 2)}" /></div>
         <div><label class="small muted">Max follow-ups</label><input name="maxFollowUps" type="number" min="0" value="${esc(m.maxFollowUps ?? 3)}" /></div>
         <div><label class="small muted">Daily send limit</label><input name="dailySendLimit" type="number" min="1" value="${esc(m.dailySendLimit ?? 20)}" /></div>
+      </div>
+      <div class="grid cols-3" style="margin-top:10px">
+        <div><label class="small muted">Hourly cap (0 = daily only)</label><input name="hourlySendLimit" type="number" min="0" value="${esc(m.hourlySendLimit ?? 0)}" /></div>
+        <div><label class="small muted">Min seconds between sends</label><input name="minSecondsBetweenSends" type="number" min="0" value="${esc(m.minSecondsBetweenSends ?? 0)}" /></div>
+        <div><label class="small muted">Max leads per run</label><input name="maxLeadsPerRun" type="number" min="1" value="${esc(m.maxLeadsPerRun ?? 25)}" /></div>
+      </div>
+      <div class="grid cols-2" style="margin-top:10px">
+        <div><label class="small muted">Campaign start (optional)</label><input name="campaignStartAt" type="date" value="${esc((m.campaignStartAt || '').slice(0, 10))}" /></div>
+        <div><label class="small muted">Campaign end (optional)</label><input name="campaignEndAt" type="date" value="${esc((m.campaignEndAt || '').slice(0, 10))}" /></div>
       </div>
       <div style="height:12px"></div>
       <label class="small muted">Outreach instructions (optional)</label>
@@ -532,6 +541,11 @@ function readMissionForm(form) {
     followUpDelayDays: Number(fd.get('followUpDelayDays') || 2),
     maxFollowUps: Number(fd.get('maxFollowUps') || 3),
     dailySendLimit: Number(fd.get('dailySendLimit') || 20),
+    hourlySendLimit: Number(fd.get('hourlySendLimit') || 0),
+    minSecondsBetweenSends: Number(fd.get('minSecondsBetweenSends') || 0),
+    maxLeadsPerRun: Number(fd.get('maxLeadsPerRun') || 25),
+    campaignStartAt: fd.get('campaignStartAt') ? `${fd.get('campaignStartAt')} 00:00:00` : null,
+    campaignEndAt: fd.get('campaignEndAt') ? `${fd.get('campaignEndAt')} 23:59:59` : null,
     locations, windows, timezone: state.user?.timezone || 'UTC',
   };
 }

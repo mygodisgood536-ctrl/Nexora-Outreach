@@ -20,7 +20,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const txStore = new AsyncLocalStorage();
 
 /** Bumped whenever schema.sql / schema.postgres.sql change. */
-export const SCHEMA_VERSION = '4';
+export const SCHEMA_VERSION = '5';
 
 /** Arbitrary but stable advisory-lock key guarding schema application. */
 const SCHEMA_LOCK_ID = 728_190_431;
@@ -35,6 +35,25 @@ const SCHEMA_LOCK_ID = 728_190_431;
 const POSTGRES_UPGRADES = [
   'ALTER TABLE users ALTER COLUMN created_ms TYPE BIGINT',
   'ALTER TABLE api_rate_limits ALTER COLUMN window_start_ms TYPE BIGINT',
+  // §10/§27 sending limits: added as nullable/defaulted columns so existing
+  // rows keep working. Fresh databases already have them from schema.sql.
+  'ALTER TABLE missions ADD COLUMN IF NOT EXISTS hourly_send_limit INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE missions ADD COLUMN IF NOT EXISTS min_seconds_between_sends INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE missions ADD COLUMN IF NOT EXISTS campaign_start_at TEXT',
+  'ALTER TABLE missions ADD COLUMN IF NOT EXISTS campaign_end_at TEXT',
+];
+
+/**
+ * SQLite cannot widen a column type with ALTER, but it can add columns. These
+ * run only when an existing database is behind the current schema version (a
+ * fresh database already gets the columns from schema.sql), because SQLite has
+ * no `ADD COLUMN IF NOT EXISTS`.
+ */
+const SQLITE_UPGRADES = [
+  { column: 'hourly_send_limit', sql: 'ALTER TABLE missions ADD COLUMN hourly_send_limit INTEGER NOT NULL DEFAULT 0' },
+  { column: 'min_seconds_between_sends', sql: 'ALTER TABLE missions ADD COLUMN min_seconds_between_sends INTEGER NOT NULL DEFAULT 0' },
+  { column: 'campaign_start_at', sql: 'ALTER TABLE missions ADD COLUMN campaign_start_at TEXT' },
+  { column: 'campaign_end_at', sql: 'ALTER TABLE missions ADD COLUMN campaign_end_at TEXT' },
 ];
 
 export class Db {
@@ -131,11 +150,22 @@ export class Db {
       await this.tx(async () => {
         await this.run('SELECT pg_advisory_xact_lock(?)', SCHEMA_LOCK_ID);
         await this.exec(ddl);
+        // Idempotent (ADD COLUMN IF NOT EXISTS), so safe on fresh databases too.
         for (const upgrade of POSTGRES_UPGRADES) await this.exec(upgrade);
         await this._writeSchemaVersion();
       });
     } else {
       await this.exec(ddl);
+      // SQLite has no `ADD COLUMN IF NOT EXISTS`, so these run only for a
+      // pre-existing database that is behind the current version; a fresh
+      // database already received the columns from schema.sql. Guard on the
+      // actual columns so a partially-applied upgrade cannot crash the boot.
+      if (metaExists) {
+        const cols = new Set((await this.all('PRAGMA table_info(missions)')).map((c) => c.name));
+        for (const { column, sql } of SQLITE_UPGRADES) {
+          if (!cols.has(column)) await this.exec(sql);
+        }
+      }
       await this._writeSchemaVersion();
     }
     return true;

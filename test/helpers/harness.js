@@ -79,6 +79,10 @@ export function makeFakeAI(overrides = {}) {
       should_stop_follow_up: true,
       is_opt_out: false,
     },
+    ask_prospect: {
+      answer: 'The recorded evidence shows no mobile viewport tag, so the site may render poorly on phones.',
+      observed: ['no viewport meta tag'],
+    },
   };
 
   const base = {

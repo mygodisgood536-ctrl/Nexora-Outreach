@@ -11,6 +11,7 @@ import { LeadService } from './services/leads.js';
 import { SuppressionService } from './services/suppression.js';
 import { EmailConnectionStore } from './services/email-store.js';
 import { ConversationService } from './services/conversations.js';
+import { ProspectService } from './services/prospect.js';
 import { NotificationService } from './services/notifications.js';
 import { AuthService } from './services/auth.js';
 import { JobQueue, STAGE } from './workers/queue.js';
@@ -45,11 +46,13 @@ export function createSystem({ db, config: cfg = config, overrides = {} } = {}) 
   const notifications = new NotificationService({ db: database });
   const auth = new AuthService({ db: database, sessionTtlHours: cfg.sessionTtlHours });
   const queue = new JobQueue(database);
+  const prospect = new ProspectService({ db: database, leads, conversations, ai: aiTasks, emailStore, queue });
 
   const services = {
     ai: aiTasks,
     aiRuntime,
     missions, leads, suppression, conversations, notifications,
+    prospect,
     emailStore, email, auth, queue, config: cfg,
     ...overrides.services,
   };

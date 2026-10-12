@@ -1,4 +1,5 @@
 import { nowSqlite, sqliteUtc } from '../core/time.js';
+import { err } from '../core/errors.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('queue');
@@ -177,6 +178,28 @@ export class JobQueue {
     await this._history(jobId, 'failed', message);
     log.warn(`job ${jobId} failed permanently`, { stage: job.stage, kind, message });
     return { retried: false };
+  }
+
+  /**
+   * Operator-initiated retry (spec §21/§30): reset a job that is not currently
+   * running back to the queue with a fresh attempt budget, so a permanently
+   * failed job can be re-run on demand instead of waiting for the next cron.
+   */
+  async retry(jobId) {
+    const job = await this.db.get('SELECT * FROM automation_jobs WHERE id = ?', jobId);
+    if (!job) return null;
+    if (job.status === JOB_STATUS.RUNNING) {
+      throw err.conflict('That job is currently running; wait for it to finish before retrying.');
+    }
+    await this.db.run(
+      `UPDATE automation_jobs
+          SET status='queued', attempts=0, run_after=?, last_error=NULL, error_kind=NULL,
+              worker_id=NULL, lease_until=NULL, finished_at=NULL, updated_at=datetime('now')
+        WHERE id=?`,
+      nowSqlite(), jobId,
+    );
+    await this._history(jobId, 'requeued', 'manual retry');
+    return this.db.get('SELECT * FROM automation_jobs WHERE id = ?', jobId);
   }
 
   /**

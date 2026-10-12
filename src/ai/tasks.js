@@ -1,7 +1,7 @@
 import { err } from '../core/errors.js';
 import {
   buildMissionInterpretation, buildSiteAnalysis, buildPresenceAnalysis,
-  buildQualification, buildOutreach, buildReplyTriage,
+  buildQualification, buildOutreach, buildReplyTriage, buildProspectQuestion,
 } from './prompts.js';
 
 /**
@@ -134,6 +134,21 @@ export class AITasks {
       },
     });
     return { ...data, model };
+  }
+
+  /** Spec §21 — a user's ad-hoc question about one prospect's recorded evidence. */
+  async askProspect(userId, { lead, analysis, question }) {
+    const { system, prompt } = buildProspectQuestion({ lead, analysis, question });
+    const { data, model } = await this.ai.completeJson(userId, 'ask_prospect', {
+      system, prompt, maxRetries: 1,
+      validate: (d) => {
+        if (!d || typeof d !== 'object') return 'response is not an object';
+        if (!isStr(d.answer) || !d.answer.trim()) return 'answer is required';
+        if (d.observed !== undefined && !isStrArray(d.observed)) return 'observed must be an array of strings';
+        return true;
+      },
+    });
+    return { ...data, observed: data.observed || [], model };
   }
 
   /** Spec §18 — inbound reply interpretation. */

@@ -212,6 +212,42 @@ HARD RULES:
   };
 }
 
+/**
+ * Spec §21 — answer a user's ad-hoc question about one prospect.
+ *
+ * Grounded strictly in the evidence already recorded for that business, so the
+ * workspace never invents observations the pipeline did not collect.
+ */
+export function buildProspectQuestion({ lead, analysis, question }) {
+  return {
+    system: `${EVIDENCE_DISCIPLINE} You answer a user's questions about ONE specific business, using only its recorded evidence.`,
+    prompt: `The user is reviewing this prospect in their workspace and asked a question.
+
+BUSINESS: ${lead.businessName}
+${lead.websiteUrl ? `WEBSITE: ${lead.websiteUrl}` : 'WEBSITE: none listed'}
+LOCATION: ${[lead.city, lead.region, lead.country].filter(Boolean).join(', ') || 'unknown'}
+OBSERVED CONTACT ROUTE: ${lead.contactRoute || 'none recorded'}
+
+RECORDED EVIDENCE FOR THIS BUSINESS (all you may refer to):
+${evidenceBlock(analysis)}
+
+USER QUESTION:
+"""
+${String(question || '').slice(0, 2000)}
+"""
+
+Return JSON:
+{
+  "answer": string,
+  "observed": array of strings
+}
+
+Rules:
+- Answer only from the recorded evidence above. If it does not contain the answer, say so plainly rather than guessing.
+- "observed" lists the specific evidence items your answer relied on; return an empty array if none applied.`,
+  };
+}
+
 /** Spec §18: interpret an inbound reply. */
 export function buildReplyTriage({ lead, mission, replyText }) {
   return {

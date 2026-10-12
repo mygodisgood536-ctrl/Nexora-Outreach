@@ -201,8 +201,10 @@ export class LeadService {
       phonePublic: row.phone_public,
       discoverySource: row.discovery_source,
       status: row.status,
+      stageError: row.stage_error,
       firstContactedAt: row.first_contacted_at,
       createdAt: row.created_at,
+      updatedAt: row.updated_at,
     };
   }
 }

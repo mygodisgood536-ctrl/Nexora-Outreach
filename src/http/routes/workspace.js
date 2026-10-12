@@ -200,6 +200,33 @@ export function registerWorkspaceRoutes(router, system) {
     });
   });
 
+  // ── Per-prospect workspace actions (spec §21) ──────────────────
+  router.post('/api/leads/:id/ask', async (ctx) => {
+    const user = requireUser(ctx);
+    // Question-answering is a model call; bound the spend a client can cause.
+    await enforceRateLimit(db, `ai:lead-ask:${user.id}`, { limit: 30, windowMs: 60_000 });
+    const body = await ctx.body();
+    const result = await system.prospect.ask(user.id, toId(ctx.params.id), body.question);
+    ctx.json(200, { answer: result.answer, observed: result.observed, model: result.model });
+  });
+
+  router.post('/api/leads/:id/draft', async (ctx) => {
+    const user = requireUser(ctx);
+    await enforceRateLimit(db, `ai:lead-draft:${user.id}`, { limit: 20, windowMs: 60_000 });
+    const body = await ctx.body();
+    const result = await system.prospect.draft(user.id, toId(ctx.params.id), {
+      followUpNumber: body.followUpNumber,
+      senderName: user.fullName,
+    });
+    ctx.json(201, result);
+  });
+
+  router.post('/api/leads/:id/refresh', async (ctx) => {
+    const user = requireUser(ctx);
+    const result = await system.prospect.refresh(user.id, toId(ctx.params.id));
+    ctx.json(202, result);
+  });
+
   // ── Conversations (spec §18) ───────────────────────────────────
   router.get('/api/conversations', async (ctx) => {
     const user = requireUser(ctx);
@@ -307,6 +334,16 @@ export function registerWorkspaceRoutes(router, system) {
         'SELECT * FROM audit_events WHERE user_id = ? ORDER BY id DESC LIMIT 50', user.id
       ),
     });
+  });
+
+  /** §21/§30 — re-queue a failed or waiting job on the operator's request. */
+  router.post('/api/jobs/:id/retry', async (ctx) => {
+    const user = requireUser(ctx);
+    const id = toId(ctx.params.id);
+    const job = await db.get('SELECT * FROM automation_jobs WHERE id = ?', id);
+    // Ownership is proven before the job is touched.
+    if (!job || job.user_id !== user.id) throw err.notFound('Job');
+    ctx.json(200, { job: await queue.retry(id) });
   });
 
   // ── Suppression (spec §17, §29) ──────────────────────────────

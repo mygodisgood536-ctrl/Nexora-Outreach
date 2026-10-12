@@ -418,10 +418,12 @@ async function renderMissionDetail(id) {
     <div class="panel">
       <div class="section-head"><h2>Activity</h2></div>
       ${(activity.jobs || []).length ? `<div class="table-wrap"><table class="table">
-        <thead><tr><th>Stage</th><th>Status</th><th>When</th><th>Detail</th></tr></thead><tbody>
+        <thead><tr><th>Stage</th><th>Status</th><th>When</th><th>Detail</th><th></th></tr></thead><tbody>
         ${activity.jobs.slice(0, 25).map((j) => `<tr><td class="mono small">${esc(j.stage || j.kind || '')}</td>
-          <td>${badge(j.status)}</td><td class="small muted">${fmtRel(j.finished_at || j.created_at || j.enqueued_at)}</td>
-          <td class="small faint">${esc((j.last_error || '').slice(0, 120))}</td></tr>`).join('')}
+          <td>${badge(j.status)}${j.error_kind ? ` <span class="faint small">${esc(j.error_kind)}</span>` : ''}</td>
+          <td class="small muted">${fmtRel(j.finished_at || j.created_at || j.enqueued_at)}</td>
+          <td class="small faint">${esc((j.last_error || '').slice(0, 120))}</td>
+          <td>${j.status === 'failed' || j.status === 'waiting_retry' ? `<button class="btn small" data-act="retry-job" data-id="${j.id}">Retry</button>` : ''}</td></tr>`).join('')}
         </tbody></table></div>` : '<div class="faint small">No job activity yet.</div>'}
     </div>`);
 }
@@ -619,25 +621,47 @@ async function renderLeadDetail(id) {
         ${l.phonePublic ? `<a class="btn small" href="tel:${esc(l.phonePublic)}">${esc(l.phonePublic)}</a>` : ''}
       </div>
       ${suppression.suppressed ? `<div class="badge red" style="margin-top:12px">Suppressed · ${esc(suppression.scope || '')} · ${esc(suppression.reason || '')}</div>` : ''}
+      ${lead.stageError ? `<div class="badge red" style="margin-top:12px">Last error: ${esc(String(lead.stageError).slice(0, 200))}</div>` : ''}
     </div>
 
     <div class="grid cols-2" style="margin-bottom:16px">
       <div class="panel">
         <div class="section-head"><h2>Website analysis</h2></div>
         ${data.websiteAnalysis ? `<div class="row" style="gap:18px;margin-bottom:10px">
-          <div><div class="card-label">Quality</div><div class="mono" style="font-size:22px">${esc(data.websiteAnalysis.quality_score ?? '—')}</div></div>
-          <div><div class="card-label">Has site</div><div class="mono" style="font-size:22px">${data.websiteAnalysis.has_website ? 'yes' : 'no'}</div></div>
+          <div><div class="card-label">Quality</div><div class="mono" style="font-size:22px">${esc(data.websiteAnalysis.score ?? '—')}</div></div>
+          <div><div class="card-label">Status</div><div class="mono" style="font-size:22px">${data.websiteAnalysis.ok ? 'ok' : 'failed'}</div></div>
         </div>
-        ${Array.isArray(data.websiteAnalysis.opportunities) ? `<div class="row" style="gap:6px;flex-wrap:wrap">${data.websiteAnalysis.opportunities.map((o) => `<span class="badge faint">${esc(o)}</span>`).join('')}</div>` : ''}`
+        ${data.websiteAnalysis.error ? `<div class="badge red" style="margin-bottom:8px">${esc(String(data.websiteAnalysis.error).slice(0, 200))}</div>` : ''}
+        ${findingsList(data.websiteAnalysis.findings)}`
           : '<div class="faint small">Not analysed yet.</div>'}
       </div>
       <div class="panel">
         <div class="section-head"><h2>Qualification</h2></div>
-        ${data.qualification ? `<div class="mono" style="font-size:22px">${esc(data.qualification.score ?? '—')}</div>
-          <div class="small muted" style="margin-top:6px">${esc(data.qualification.rationale || data.qualification.reason || '')}</div>`
+        ${data.qualification ? `<div class="row" style="gap:18px;margin-bottom:8px">
+          <div><div class="card-label">Qualified</div><div class="mono" style="font-size:22px">${data.qualification.qualified ? 'yes' : 'no'}</div></div>
+          <div><div class="card-label">Confidence</div><div class="mono" style="font-size:22px">${data.qualification.confidence != null ? `${Math.round(Number(data.qualification.confidence) * 100)}%` : '—'}</div></div>
+        </div>
+        ${data.qualification.opportunity ? `<div class="small">${esc(data.qualification.opportunity)}</div>` : ''}
+        <div class="small muted" style="margin-top:6px">${esc(data.qualification.reason || data.qualification.explanation || '')}</div>`
           : '<div class="faint small">Not qualified yet.</div>'}
       </div>
     </div>
+
+    <div class="panel" style="margin-bottom:16px">
+      <div class="spread">
+        <div class="section-head" style="margin:0"><h2>Ask about this prospect</h2></div>
+        <div class="row" style="gap:8px">
+          <button class="btn small" data-act="refresh-evidence" data-id="${lead.id}">Refresh evidence</button>
+          <button class="btn small" data-act="draft-lead" data-id="${lead.id}">Draft outreach</button>
+        </div>
+      </div>
+      <div class="row" style="gap:8px;margin-top:10px;align-items:flex-end">
+        <textarea id="ask-question" rows="2" placeholder="e.g. What is the strongest reason to contact this business?"></textarea>
+        <button class="btn small" data-act="ask" data-id="${lead.id}">Ask</button>
+      </div>
+      <div id="ask-answer" style="margin-top:10px"></div>
+    </div>
+
 
     <div class="panel" style="margin-bottom:16px">
       <div class="section-head"><h2>Messages</h2></div>
@@ -645,6 +669,7 @@ async function renderLeadDetail(id) {
         <div class="panel" style="background:rgba(56,230,255,.04);margin-bottom:10px">
           <div class="spread"><b>${esc(msg.subject)}</b>${badge(msg.send_status)}</div>
           <div class="small muted" style="margin-top:8px;white-space:pre-wrap">${esc((msg.body_text || '').slice(0, 600))}</div>
+          ${msg.error ? `<div class="badge red" style="margin-top:8px">${esc(String(msg.error).slice(0, 200))}</div>` : ''}
           ${msg.send_status === 'draft' || msg.send_status === 'awaiting_approval' ? `<div class="row" style="gap:8px;margin-top:10px">
             <button class="btn small" data-act="approve" data-id="${msg.id}">Approve & send</button>
             <button class="btn small" data-act="reject" data-id="${msg.id}">Reject</button></div>` : ''}
@@ -655,6 +680,18 @@ async function renderLeadDetail(id) {
       <div class="section-head"><h2>Presence & evidence</h2></div>
       ${data.presenceAnalysis ? `<div class="small muted" style="white-space:pre-wrap">${esc(JSON.stringify(data.presenceAnalysis, null, 2).slice(0, 1200))}</div>` : '<div class="faint small">No presence signals recorded.</div>'}
     </div>`);
+}
+
+/** Renders an analysis `findings` value, which may be an array or a summary object. */
+function findingsList(findings) {
+  if (!findings) return '';
+  const items = Array.isArray(findings)
+    ? findings
+    : Array.isArray(findings.findings) ? findings.findings : null;
+  if (items) {
+    return `<ul class="small muted" style="margin:8px 0 0 16px">${items.map((f) => `<li>${esc(f.issue || f.name || String(f))}${f.evidence ? ` — <span class="faint">${esc(String(f.evidence).slice(0, 160))}</span>` : ''}</li>`).join('')}</ul>`;
+  }
+  return `<div class="faint small" style="margin-top:8px">${esc(JSON.stringify(findings).slice(0, 300))}</div>`;
 }
 
 // ============================================================
@@ -926,6 +963,42 @@ async function runAction(act, el) {
       }
       case 'approve': await api(`/api/messages/${el.dataset.id}/approve`, { method: 'POST', body: {} }); toast('Message approved and queued', 'ok'); render(); return;
       case 'reject': await api(`/api/messages/${el.dataset.id}/reject`, { method: 'POST', body: {} }); toast('Message rejected', 'ok'); render(); return;
+
+      case 'ask': {
+        const id = el.dataset.id;
+        const question = document.getElementById('ask-question')?.value?.trim();
+        const out = document.getElementById('ask-answer');
+        if (!question) { toast('Type a question first.', 'err'); return; }
+        if (out) out.innerHTML = '<div class="faint small">Reading the recorded evidence…</div>';
+        el.disabled = true;
+        try {
+          const r = await api(`/api/leads/${id}/ask`, { method: 'POST', body: { question } });
+          if (out) out.innerHTML = `<div class="small" style="white-space:pre-wrap">${esc(r.answer)}</div>${(r.observed || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">${r.observed.map((o) => `<span class="badge faint">${esc(o)}</span>`).join('')}</div>` : ''}`;
+        } catch (e) {
+          if (out) out.innerHTML = `<div class="small" style="color:#ff6b6b">${esc(e.message)}</div>`;
+        } finally { el.disabled = false; }
+        return;
+      }
+      case 'draft-lead': {
+        el.disabled = true;
+        try {
+          await api(`/api/leads/${el.dataset.id}/draft`, { method: 'POST', body: {} });
+          toast('Draft created — review it below', 'ok'); render();
+        } finally { el.disabled = false; }
+        return;
+      }
+      case 'refresh-evidence': {
+        el.disabled = true;
+        try { await api(`/api/leads/${el.dataset.id}/refresh`, { method: 'POST', body: {} }); toast('Evidence refresh queued', 'ok'); }
+        finally { el.disabled = false; }
+        return;
+      }
+      case 'retry-job': {
+        el.disabled = true;
+        try { await api(`/api/jobs/${el.dataset.id}/retry`, { method: 'POST', body: {} }); toast('Job re-queued', 'ok'); render(); }
+        finally { el.disabled = false; }
+        return;
+      }
       case 'read-notif': await api(`/api/notifications/${el.dataset.id}/read`, { method: 'POST', body: {} }); render(); return;
       case 'toggle-pause': {
         const paused = Boolean(state.user?.automationPaused);

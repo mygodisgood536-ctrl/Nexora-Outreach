@@ -147,6 +147,27 @@ test('queue: complete stores result and clears the lease', async () => {
   assert.equal(JSON.parse(done.result).discovered, 7);
 });
 
+test('queue: manual retry re-queues a failed job with a fresh attempt budget', async () => {
+  const { queue, userId, missionId } = await fixture();
+  const { job } = await queue.enqueue({ userId, missionId, stage: STAGE.DISCOVERY, maxAttempts: 1 });
+  await queue.claim('w1');
+  await queue.fail(job.id, new Error('boom'), { kind: 'system', retryable: false });
+  assert.equal((await queue.get(job.id)).status, 'failed');
+
+  const retried = await queue.retry(job.id);
+  assert.equal(retried.status, 'queued');
+  assert.equal(retried.attempts, 0);
+  assert.equal(retried.last_error, null);
+  assert.ok((await queue.history(job.id)).map((h) => h.event).includes('requeued'));
+});
+
+test('queue: retry refuses a job that is currently running', async () => {
+  const { queue, userId, missionId } = await fixture();
+  const { job } = await queue.enqueue({ userId, missionId, stage: STAGE.DISCOVERY });
+  await queue.claim('w1');
+  await assert.rejects(() => queue.retry(job.id), /running/i);
+});
+
 test('queue: history records the lifecycle for the Activity view (spec 36)', async () => {
   const { queue, userId, missionId } = await fixture();
   const { job } = await queue.enqueue({ userId, missionId, stage: STAGE.DISCOVERY });

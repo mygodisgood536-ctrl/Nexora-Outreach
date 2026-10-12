@@ -78,7 +78,7 @@ export class ResendEmailProvider extends EmailProvider {
       throw err.network('Could not reach Resend. Check your connection and try again.', e);
     }
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw mapResendSendError(res.status, body);
+    if (!res.ok) throw mapResendCredentialError(res.status, body);
     return body;
   }
 
@@ -148,6 +148,21 @@ function mapResendSendError(status, body) {
   }
   // 422 covers an unverified From domain / invalid recipient — not retryable.
   return err.email('SEND_FAILED', `Resend refused the message: ${reason || status}`.trim());
+}
+
+/** Errors from the credential check read differently from send failures. */
+function mapResendCredentialError(status, body) {
+  const reason = reasonOf(body);
+  if (status === 401 || status === 403) {
+    return err.email('MAILBOX_AUTH_FAILED', `Resend rejected the API key: ${reason || 'unauthorized'}`.trim());
+  }
+  if (status === 429) {
+    return err.email('PROVIDER_TEMPORARY', 'Resend rate limit reached; try connecting again shortly.');
+  }
+  if (status >= 500) {
+    return err.email('PROVIDER_TEMPORARY', `Resend is unavailable (${status}); try again shortly.`);
+  }
+  return err.validation(`Resend could not verify the API key: ${reason || status}`.trim());
 }
 
 export default ResendEmailProvider;

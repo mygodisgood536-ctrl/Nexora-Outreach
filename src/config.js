@@ -191,6 +191,16 @@ export const config = {
     get configured() { return Boolean(this.clientId && this.clientSecret); },
   },
 
+  /**
+   * Resend is a per-user integration: the user supplies their own API key, so
+   * there is no server-side client credential to configure (unlike the OAuth
+   * providers). Only the endpoint is configurable, which lets a workspace point
+   * at a self-hosted Resend-compatible gateway.
+   */
+  resend: {
+    baseUrl: (process.env.RESEND_BASE_URL || 'https://api.resend.com').replace(/\/+$/, ''),
+  },
+
   discovery: {
     overpassUrl: process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter',
     googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY || '',

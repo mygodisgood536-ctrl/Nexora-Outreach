@@ -15,6 +15,21 @@ export class GoogleEmailProvider extends EmailProvider {
     'https://www.googleapis.com/auth/gmail.modify',
     'https://www.googleapis.com/auth/userinfo.email',
   ];
+  static capabilities = {
+    send: true,
+    replies: true,
+    senderIdentity: true,
+    domainVerification: false,
+    quotaReporting: false,
+  };
+  static docsUrl = 'https://developers.google.com/gmail/api/guides/sending';
+  static whatItDoes = 'Sends outreach through the Google account you authorize, and pulls replies from that same mailbox back into Nexora.';
+  static requirements = [
+    'A Google Cloud project with the Gmail API enabled.',
+    'An OAuth 2.0 "Web application" client (Client ID and Client Secret).',
+    'Both values set on this deployment as GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.',
+  ];
+  static notes = ['Google enforces its own daily sending limits; Nexora never exceeds them.'];
 
   isConfigured() { return Boolean(this.config.google.clientId && this.config.google.clientSecret); }
 

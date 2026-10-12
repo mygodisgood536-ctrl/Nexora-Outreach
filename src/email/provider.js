@@ -33,10 +33,64 @@ export class EmailProvider {
   /** Kept minimal (spec §6 "minimum required authorization"). */
   static scopes = [];
 
+  /**
+   * How the user authorizes this provider:
+   *  - 'oauth'   → a browser redirect returns an authorization code.
+   *  - 'api_key' → the user pastes a provider API key (no redirect).
+   * The two are genuinely different flows and must not be conflated in the UI.
+   */
+  static authType = 'oauth';
+
+  /**
+   * What this provider can actually do. Not every provider is identical, so the
+   * UI reads these flags instead of pretending all integrations are the same
+   * (the vision explicitly forbids claiming identical capabilities).
+   */
+  static capabilities = {
+    send: true,
+    replies: false,          // can read inbound replies here
+    senderIdentity: false,   // can identify/verify the sending address
+    domainVerification: false, // can list/verify sending domains
+    quotaReporting: false,   // can report remaining quota / rate-limit state
+  };
+
+  /** Official docs, linked from the setup UI. */
+  static docsUrl = '';
+  /** One-paragraph, plain-language description shown on the provider card. */
+  static whatItDoes = '';
+  /** Prerequisites the user must satisfy before connecting. */
+  static requirements = [];
+  /**
+   * Inputs for the setup form. Only used by 'api_key' providers; OAuth
+   * providers use the redirect flow. Each field:
+   *   { name, label, type, required, placeholder, help, secret }
+   */
+  static fields = [];
+  /** Honest limitations or warnings shown on the card. */
+  static notes = [];
+
   constructor({ config }) { this.config = config; }
 
   /** False when required client credentials are absent, so the UI can hide it. */
   isConfigured() { return false; }
+
+  /** Public, secret-free description used to build the connection UI. */
+  describe() {
+    const C = this.constructor;
+    return {
+      id: C.id,
+      label: C.label,
+      configured: this.isConfigured(),
+      authType: C.authType,
+      capabilities: { ...C.capabilities },
+      docsUrl: C.docsUrl,
+      whatItDoes: C.whatItDoes,
+      requirements: [...C.requirements],
+      fields: C.fields.map((f) => ({ ...f })),
+      notes: [...C.notes],
+      scopes: [...C.scopes],
+    };
+  }
 
   /** Provider authorization URL the browser redirects to. */
   async getAuthUrl() { throw new Error('not implemented'); }
@@ -49,6 +103,15 @@ export class EmailProvider {
 
   /** The authorized mailbox address. */
   async getAccountEmail() { throw new Error('not implemented'); }
+
+  /**
+   * Validate a pasted credential for an 'api_key' provider. Returns structured,
+   * secret-free detail (e.g. the visible sending domains). Throws a typed error
+   * when the credential is rejected. OAuth providers do not implement this.
+   */
+  async validateCredential() {
+    throw err.email('PROVIDER_UNSUPPORTED', `${this.constructor.label} does not support API-key connections.`);
+  }
 
   /**
    * Send one message. Must return { providerMessageId } and must honour an
@@ -84,12 +147,7 @@ export class EmailService {
 
   /** Public list for the UI — configured state only, never credentials. */
   catalogue() {
-    return Object.values(this.providers).map((p) => ({
-      id: p.constructor.id,
-      label: p.constructor.label,
-      configured: p.isConfigured(),
-      scopes: p.constructor.scopes,
-    }));
+    return Object.values(this.providers).map((p) => p.describe());
   }
 
   async statusFor(userId) {
@@ -107,6 +165,56 @@ export class EmailService {
   }
 
   /**
+   * Connect a provider that uses a pasted API key (spec §6). The credential is
+   * validated against the provider's own API before anything is persisted, so a
+   * typo never becomes a "connected" mailbox that only fails at send time.
+   */
+  async connectApiKey(userId, providerId, { apiKey, fromEmail, ip = null } = {}) {
+    const provider = this.get(providerId);
+    if (provider.constructor.authType !== 'api_key') {
+      throw err.validation(`${provider.constructor.label} is connected through an authorization redirect, not an API key.`);
+    }
+    const key = String(apiKey || '').trim();
+    const from = String(fromEmail || '').trim();
+    if (!key) throw err.validation('Paste the API key for this provider.');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(from)) throw err.validation('Enter a valid From email address.');
+
+    const info = await provider.validateCredential(key);
+    const domain = from.split('@')[1].toLowerCase();
+    const domains = (info?.domains || []).map((d) => ({ name: d.name, status: d.status }));
+    const verified = domains.some((d) => String(d.name).toLowerCase() === domain && d.status === 'verified');
+    const testSender = domain === 'resend.dev';
+    const senderReady = verified || testSender;
+    const detail = senderReady
+      ? null
+      : `Sender domain "${domain}" is not verified yet. Verify it with ${provider.constructor.label}, or send from a test address, before activating a campaign.`;
+
+    await this.store.save(userId, providerId, {
+      accessToken: key,
+      refreshToken: null,
+      scopes: provider.constructor.scopes,
+      expiresAt: null,
+      accountEmail: from,
+      ip,
+    });
+    if (detail) await this.store.markStatus(userId, providerId, CONNECTION_STATUS.CONNECTED, detail);
+
+    return {
+      ...this.store.toPublic(await this.store.raw(userId, providerId)),
+      senderReady,
+      domains,
+    };
+  }
+
+  /** True when the active (or named) provider can read inbound replies here. */
+  async replyCapable(userId, providerId = null) {
+    const active = providerId ? { provider: providerId } : await this.store.activeFor(userId);
+    const pid = providerId || active?.provider;
+    if (!pid) return false;
+    return Boolean(this.providers[pid]?.constructor?.capabilities?.replies);
+  }
+
+  /**
    * Step 1 of OAuth: hand the browser the provider's consent URL.
    *
    * The `state` value is a cryptographically random nonce that is persisted
@@ -115,6 +223,9 @@ export class EmailService {
    */
   async beginAuth(userId, providerId, { redirectUri }) {
     const provider = this.get(providerId);
+    if (provider.constructor.authType !== 'oauth') {
+      throw err.validation(`${provider.constructor.label} is connected by pasting an API key, not an authorization redirect.`);
+    }
     if (!provider.isConfigured()) {
       throw err.email('PROVIDER_NOT_CONFIGURED', `${provider.constructor.label} is not configured on this server.`);
     }
@@ -217,10 +328,15 @@ export class EmailService {
   }
 
   /** Send one message through the user's authorized mailbox. */
-  async send(userId, { to, subject, text, html = null, idempotencyKey = null, providerId = null }) {
+  async send(userId, { to, subject, text, html = null, idempotencyKey = null, providerId = null, from = null }) {
     const { accessToken, provider } = await this.accessTokenFor(userId, providerId);
+    let sender = from;
+    if (!sender) {
+      const row = await this.store.raw(userId, provider);
+      sender = row?.account_email || null;
+    }
     const result = await this.get(provider).sendMessage({
-      accessToken, to, subject, text, html, idempotencyKey,
+      accessToken, from: sender, to, subject, text, html, idempotencyKey,
     });
     return { ...result, provider };
   }

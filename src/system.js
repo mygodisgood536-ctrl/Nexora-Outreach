@@ -5,6 +5,7 @@ import { AITasks } from './ai/tasks.js';
 import { EmailService } from './email/provider.js';
 import { GoogleEmailProvider } from './email/google.js';
 import { MicrosoftEmailProvider } from './email/microsoft.js';
+import { ResendEmailProvider } from './email/resend.js';
 import { MissionService } from './services/missions.js';
 import { LeadService } from './services/leads.js';
 import { SuppressionService } from './services/suppression.js';
@@ -35,6 +36,7 @@ export function createSystem({ db, config: cfg = config, overrides = {} } = {}) 
   const email = new EmailService({ db: database, store: emailStore });
   email.register(new GoogleEmailProvider({ config: cfg }));
   email.register(new MicrosoftEmailProvider({ config: cfg }));
+  email.register(new ResendEmailProvider({ config: cfg }));
 
   const missions = new MissionService({ db: database });
   const leads = new LeadService({ db: database });

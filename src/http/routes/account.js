@@ -220,6 +220,23 @@ export function registerAccountRoutes(router, system) {
   });
 
   /**
+   * API-key providers (spec §6). Resend is connected by pasting a key rather
+   * than by an authorization redirect; the credential is validated against the
+   * provider before it is stored. OAuth providers reject this route.
+   */
+  router.post('/api/email/:provider/connect-key', async (ctx) => {
+    const user = requireUser(ctx);
+    const provider = ctx.params.provider;
+    const body = await ctx.body();
+    const connection = await email.connectApiKey(user.id, provider, {
+      apiKey: body?.apiKey,
+      fromEmail: body?.fromEmail,
+      ip: clientIp(ctx.req),
+    });
+    ctx.json(200, { connection });
+  });
+
+  /**
    * §17 — bounce and complaint ingestion.
    *
    * Two kinds of caller share this endpoint: an authenticated user (or their

@@ -82,6 +82,30 @@ test('api: connecting an unconfigured or unknown provider fails clearly', async 
   });
 });
 
+test('api: an API-key provider (Resend) connects without an authorization redirect', async () => {
+  await withServer(async ({ base }) => {
+    const c = await signedIn(base);
+
+    // OAuth providers reject the API-key route; unknown providers are a clear 502.
+    assert.equal((await c.post('/api/email/google/connect-key', { apiKey: 'x', fromEmail: 'a@b.com' })).status, 422);
+    assert.equal((await c.post('/api/email/pigeon/connect-key', { apiKey: 'x', fromEmail: 'a@b.com' })).status, 502);
+
+    // A missing key or a malformed From address is a validation error, not a connection.
+    assert.equal((await c.post('/api/email/resend/connect-key', { fromEmail: 'a@b.com' })).status, 422);
+    assert.equal((await c.post('/api/email/resend/connect-key', { apiKey: 're_x', fromEmail: 'nope' })).status, 422);
+
+    const ok = await c.post('/api/email/resend/connect-key', { apiKey: 're_secret', fromEmail: 'team@acme.com' });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.connection.accountEmail, 'team@acme.com');
+
+    const list = await c.get('/api/email/connections');
+    const resend = list.body.providers.find((p) => p.id === 'resend');
+    assert.equal(resend.authType, 'api_key');
+    assert.equal(resend.capabilities.replies, false, 'Resend must not claim inbound reply support');
+    assert.equal(resend.connection.status, 'connected');
+  });
+});
+
 test('api: a configured provider completes the full OAuth round trip', async () => {
   await withServer(async ({ base, email }) => {
     const c = await signedIn(base);

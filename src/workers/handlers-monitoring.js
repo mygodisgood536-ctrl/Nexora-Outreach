@@ -21,6 +21,13 @@ export async function mailboxMonitorHandler(ctx) {
   const { services, job } = ctx;
   const { email, conversations, notifications, ai, leads } = services;
 
+  // Some providers can send but cannot surface inbound replies (e.g. Resend,
+  // spec §6 capability honest-reporting). Polling them would be a guaranteed no-op.
+  if (typeof email.replyCapable === 'function') {
+    const capable = await email.replyCapable(job.user_id);
+    if (!capable) return { checked: 0, replies: 0, skipped: 'provider_has_no_inbound_replies' };
+  }
+
   const replies = await email.replies(job.user_id);
   if (!replies.length) return { checked: 0, replies: 0 };
 

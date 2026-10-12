@@ -8,6 +8,21 @@ export class MicrosoftEmailProvider extends EmailProvider {
   static id = 'microsoft';
   static label = 'Microsoft / Outlook';
   static scopes = ['offline_access', 'User.Read', 'Mail.Send', 'Mail.Read'];
+  static capabilities = {
+    send: true,
+    replies: true,
+    senderIdentity: true,
+    domainVerification: false,
+    quotaReporting: false,
+  };
+  static docsUrl = 'https://learn.microsoft.com/graph/api/user-sendmail';
+  static whatItDoes = 'Sends outreach through the Microsoft 365 / Outlook account you authorize, and pulls replies from that mailbox back into Nexora.';
+  static requirements = [
+    'An app registration in Microsoft Entra ID (Azure AD).',
+    'A client secret for that app, with delegated Mail.Send, Mail.Read, User.Read and offline_access permissions.',
+    'MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET set on this deployment (MICROSOFT_TENANT optional, defaults to "common").',
+  ];
+  static notes = ['Microsoft applies tenant-level sending limits; Nexora never exceeds them.'];
 
   _base() {
     return `https://login.microsoftonline.com/${this.config.microsoft.tenant}/oauth2/v2.0`;

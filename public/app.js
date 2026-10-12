@@ -730,7 +730,58 @@ async function renderSettings() {
   const providers = ai.providers || [];
   const paused = Boolean(state.user?.automationPaused);
 
-  const connected = (p) => p.connection?.status === 'connected';
+  const connected = (p) => (p.connection || {}).status === 'connected';
+
+  // A provider card renders differently per provider: OAuth offers a redirect,
+  // API-key providers (Resend) render their own fields. Capabilities are shown
+  // honestly so no provider is advertised as something it is not.
+  const fieldRow = (f) => `
+    <div style="margin-top:8px">
+      <label class="small muted">${esc(f.label)}</label>
+      <input name="${esc(f.name)}" type="${esc(f.type || 'text')}" ${f.required ? 'required' : ''}
+             autocomplete="${f.secret ? 'new-password' : 'off'}" placeholder="${esc(f.placeholder || '')}">
+      ${f.help ? `<div class="faint small" style="margin-top:4px">${esc(f.help)}</div>` : ''}
+    </div>`;
+  const providerCard = (p) => {
+    const cap = p.capabilities || {};
+    const conn = p.connection || {};
+    const isApiKey = p.authType === 'api_key';
+    const capabilityTag = (on, label) => badge(label, on ? 'green' : 'faint');
+    return `
+    <div class="panel" style="border:1px solid rgba(255,255,255,.09)">
+      <div class="spread">
+        <b>${esc(p.label || p.id)}</b>
+        ${connected(p) ? badge('connected', 'green') : badge('not connected', 'faint')}
+      </div>
+      ${p.whatItDoes ? `<p class="small muted" style="margin-top:8px">${esc(p.whatItDoes)}</p>` : ''}
+      <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">
+        ${capabilityTag(cap.send, 'Sends')}
+        ${capabilityTag(cap.replies, cap.replies ? 'Reads replies' : 'No replies')}
+        ${capabilityTag(cap.domainVerification, 'Domains')}
+        ${badge(isApiKey ? 'API key' : 'OAuth', 'faint')}
+      </div>
+      ${connected(p) ? `
+        <div style="margin-top:12px">
+          <div class="small"><b>${esc(conn.accountEmail || '')}</b></div>
+          ${conn.statusDetail ? `<div class="small" style="margin-top:4px;color:#f5b74e">${esc(conn.statusDetail)}</div>` : ''}
+          <div class="row" style="margin-top:10px">
+            <button class="btn small" data-act="email-disconnect" data-provider="${esc(p.id)}">Disconnect</button>
+            ${p.docsUrl ? `<a class="btn small" href="${esc(p.docsUrl)}" target="_blank" rel="noopener">Docs</a>` : ''}
+          </div>
+        </div>` : isApiKey ? `
+        <form data-form="email-connect-key" data-provider="${esc(p.id)}" style="margin-top:12px">
+          ${(p.fields || []).map(fieldRow).join('')}
+          ${(p.requirements || []).length ? `<details style="margin-top:10px"><summary class="small muted">What you need</summary><ul class="small faint" style="margin:8px 0 0 18px">${p.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></details>` : ''}
+          <button class="btn small" type="submit" style="margin-top:12px">Connect ${esc(p.label || p.id)}</button>
+        </form>` : `
+        <div style="margin-top:12px">
+          ${p.configured
+            ? `<button class="btn small" data-act="email-connect" data-provider="${esc(p.id)}">Connect with ${esc(p.label || p.id)}</button>`
+            : `<div class="small faint">Not configured on this deployment. Set its client credentials in the environment to enable it.</div>`}
+        </div>`}
+      ${(p.notes || []).length ? `<div class="faint small" style="margin-top:10px">${p.notes.map((n) => esc(n)).join(' ')}</div>` : ''}
+    </div>`;
+  };
 
   setView(`
     <div class="grid cols-2" style="margin-bottom:16px">
@@ -783,12 +834,10 @@ async function renderSettings() {
 
     <div class="panel" style="margin-bottom:16px">
       <div class="section-head"><h2>Email connections</h2></div>
-      ${state.email.length ? state.email.map((p) => `
-        <div class="spread" style="padding:10px 0;border-bottom:1px dashed var(--line)">
-          <div class="row">${badge(connected(p) ? 'connected' : 'not connected', connected(p) ? 'green' : 'faint')}<b>${esc(p.provider)}</b>${p.connection?.account_email ? `<span class="faint small">${esc(p.connection.account_email)}</span>` : ''}</div>
-          ${connected(p) ? `<button class="btn small" data-act="email-disconnect" data-provider="${esc(p.provider)}">Disconnect</button>`
-            : `<button class="btn small" data-act="email-connect" data-provider="${esc(p.provider)}">Connect</button>`}
-        </div>`).join('') : '<div class="faint small">No email providers configured. Set the OAuth credentials in the environment.</div>'}
+      <p class="small muted">Connect one or more sending accounts. Nexora sends through the connected account and records every message. Providers differ — read each card before connecting.</p>
+      <div class="grid cols-2" style="margin-top:12px">
+        ${state.email.length ? state.email.map(providerCard).join('') : '<div class="faint small">No email providers available.</div>'}
+      </div>
     </div>
 
     <div class="panel">
@@ -964,6 +1013,16 @@ async function runForm(name, form) {
       const r = await api('/api/auth/profile', { method: 'PATCH', body: { fullName: fd.get('fullName'), timezone: fd.get('timezone') } });
       state.user = r.user || state.user;
       toast('Profile saved', 'ok'); render(); return;
+    }
+    if (name === 'email-connect-key') {
+      const provider = form.dataset.provider;
+      const fd = new FormData(form);
+      const body = {};
+      for (const [k, v] of fd.entries()) body[k] = v;
+      const r = await api(`/api/email/${provider}/connect-key`, { method: 'POST', body });
+      const c = r.connection || {};
+      toast(c.senderReady === false ? 'Connected — verify your sending domain before sending.' : 'Email account connected', 'ok');
+      renderSettings(); return;
     }
     if (name === 'mission') {
       const body = readMissionForm(form);

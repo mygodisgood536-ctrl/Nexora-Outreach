@@ -144,7 +144,7 @@ export function makeFakeEmail(db = null) {
     async replies() { return state.replies; },
     /** Rejects unknown providers and actually drops the connection. */
     async disconnect(userId, providerId) {
-      if (!['google', 'microsoft'].includes(providerId)) {
+      if (!['google', 'microsoft', 'resend'].includes(providerId)) {
         throw err.email('PROVIDER_UNSUPPORTED', `No email provider named "${providerId}".`);
       }
       if (db) await db.run('DELETE FROM email_connections WHERE user_id = ? AND provider = ?', userId, providerId);
@@ -152,16 +152,19 @@ export function makeFakeEmail(db = null) {
     },
     /** Mirrors the real catalogue: every registered provider, never secrets. */
     async statusFor(userId) {
-      const catalogue = ['google', 'microsoft'].map((id) => {
-        const row = db_connections.get(`${userId}:${id}`) || null;
+      const catalogue = [
+        { id: 'google', label: 'Google', authType: 'oauth', capabilities: { send: true, replies: true } },
+        { id: 'microsoft', label: 'Microsoft', authType: 'oauth', capabilities: { send: true, replies: true } },
+        { id: 'resend', label: 'Resend', authType: 'api_key', capabilities: { send: true, replies: false } },
+      ].map((meta) => {
+        const row = db_connections.get(`${userId}:${meta.id}`) || null;
         return {
-          id,
-          label: id === 'google' ? 'Google' : 'Microsoft',
-          configured: !unconfigured.has(id),
+          ...meta,
+          configured: meta.authType === 'api_key' ? true : !unconfigured.has(meta.id),
           scopes: ['https://www.googleapis.com/auth/gmail.modify'],
           connection: row
-            ? { provider: id, status: 'connected', accountEmail: row.accountEmail }
-            : { provider: id, status: 'disconnected', accountEmail: null },
+            ? { provider: meta.id, status: 'connected', accountEmail: row.accountEmail }
+            : { provider: meta.id, status: 'disconnected', accountEmail: null },
         };
       });
       // The real service reads persisted connections; tests may attach a mailbox
@@ -220,6 +223,23 @@ export function makeFakeEmail(db = null) {
     email.connect(userId, providerId, `${providerId}@example.com`);
     return { provider: providerId, status: 'connected', accountEmail: `${providerId}@example.com` };
   };
+  // ── API-key providers (Resend), mirroring EmailService.connectApiKey ──
+  email.connectApiKey = async (userId, providerId, { apiKey, fromEmail } = {}) => {
+    if (!['google', 'microsoft', 'resend'].includes(providerId)) {
+      throw err.email('PROVIDER_UNSUPPORTED', `No email provider named "${providerId}".`);
+    }
+    if (providerId !== 'resend') {
+      throw err.validation(`${providerId} is connected through an authorization redirect, not an API key.`);
+    }
+    if (!String(apiKey || '').trim()) throw err.validation('Paste the API key for this provider.');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(fromEmail || '').trim())) {
+      throw err.validation('Enter a valid From email address.');
+    }
+    email.connect(userId, 'resend', String(fromEmail).trim());
+    return { provider: 'resend', status: 'connected', accountEmail: String(fromEmail).trim(), senderReady: true, domains: [] };
+  };
+  email.replyCapable = async (_userId, providerId = null) =>
+    (providerId ? ['google', 'microsoft'].includes(providerId) : true);
   return email;
 }
 const ALLOWED_SETUP_OPTIONS = ['discoveryCandidates', 'aiOverrides', 'emailState'];

@@ -18,7 +18,11 @@
  */
 
 const NOW_PG = "to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS')";
-const NOW_RE = /datetime\(\s*'now'\s*\)/i;
+// Anchored: only match when `datetime('now')` starts at the current index. A
+// non-anchored pattern also matches at an earlier `d` (e.g. the `d` inside
+// `updated_at=datetime('now')`), and advancing by the match length from the
+// wrong start corrupts the scan and can swallow later placeholders.
+const NOW_RE = /^datetime\(\s*'now'\s*\)/i;
 
 /** Count `?` placeholders outside literals/comments (SQLite dialect). */
 export function countPlaceholders(sql) {

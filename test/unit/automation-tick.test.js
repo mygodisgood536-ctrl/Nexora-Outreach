@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import config from '../../src/config.js';
 import { createTestSystem } from '../helpers/api.js';
 import { seedUser, seedMission, STAGE } from '../helpers/harness.js';
+import { lastAudit, CRON_TICK_ACTION } from '../../src/services/audit.js';
 
 /**
  * §10/§26 — the opportunistic automation driver. On a serverless host the Cron
@@ -32,6 +33,10 @@ test('automation: the opportunistic tick drains real work then throttles itself'
     const first = await system.opportunisticTick();
     assert.ok(first, 'the first tick runs');
     assert.ok(first.drained >= 1, 'it drains real queued work');
+
+    const run = await lastAudit(db, CRON_TICK_ACTION);
+    assert.ok(run, 'the opportunistic run is recorded so it can be proven afterwards');
+    assert.match(String(run.detail), /opportunistic/);
 
     const second = await system.opportunisticTick();
     assert.equal(second, null, 'a second tick within the interval is throttled');

@@ -1,14 +1,12 @@
 import { createLogger } from '../../core/logger.js';
 import config from '../../config.js';
 import { requireUser } from '../middleware.js';
-import { recordAudit, lastAudit } from '../../services/audit.js';
+import { recordAudit, lastAudit, CRON_TICK_ACTION } from '../../services/audit.js';
 
 const log = createLogger('cron');
 
 /** Anonymous is fine: the shared secret is the authentication. */
 const PUBLIC = { auth: false, csrf: false };
-/** The action name every automation tick is recorded under, for observability. */
-export const CRON_TICK_ACTION = 'cron.tick';
 
 /**
  * §26 — the serverless automation driver.

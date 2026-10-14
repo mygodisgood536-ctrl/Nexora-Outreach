@@ -6,8 +6,7 @@ import {
 import { normalizeEmail } from '../../core/normalize.js';
 import config from '../../config.js';
 import { createLogger } from '../../core/logger.js';
-import { lastAudit } from '../../services/audit.js';
-import { CRON_TICK_ACTION } from './system.js';
+import { lastAudit, CRON_TICK_ACTION } from '../../services/audit.js';
 
 const log = createLogger('http');
 

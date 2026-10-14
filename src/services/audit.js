@@ -3,6 +3,13 @@ import { createLogger } from '../core/logger.js';
 const log = createLogger('audit');
 
 /**
+ * The single audit action that proves an automation tick ran — shared by the
+ * cron route and the opportunistic driver so both are observable the same way.
+ */
+export const CRON_TICK_ACTION = 'cron.tick';
+
+
+/**
  * Audit trail for important account and automation events (spec §5.3, §17, §30).
  * Kept in its own module so every service records events the same way.
  *

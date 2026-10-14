@@ -14,6 +14,7 @@ import { ConversationService } from './services/conversations.js';
 import { ProspectService } from './services/prospect.js';
 import { EvidenceService } from './services/evidence.js';
 import { MessageQualityService } from './services/message-quality.js';
+import { recordAudit, CRON_TICK_ACTION } from './services/audit.js';
 import { NotificationService } from './services/notifications.js';
 import { AuthService } from './services/auth.js';
 import { JobQueue, STAGE } from './workers/queue.js';
@@ -100,6 +101,12 @@ export function createSystem({ db, config: cfg = config, overrides = {} } = {}) 
     try {
       const scouted = await scheduler.tick();
       const drained = await worker.drain({ maxJobs: cfg.automation.autoTickMaxJobs || 10 });
+      // Record the same audit row the Cron route writes, so `lastRunAt` proves
+      // automation ran even when the opportunistic path, not the Cron, drove it.
+      await recordAudit(database, {
+        actor: 'system', action: CRON_TICK_ACTION,
+        detail: { source: 'opportunistic', scouted: scouted.length, drained: drained.length },
+      });
       return { scouted: scouted.length, drained: drained.length };
     } finally {
       autoTickInFlight = false;

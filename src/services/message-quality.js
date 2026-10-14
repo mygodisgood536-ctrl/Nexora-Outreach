@@ -37,6 +37,7 @@ export const QUALITY_ISSUE = {
   NO_PERSONALIZATION: 'NO_PERSONALIZATION',
   UNSUPPORTED_REFERENCE: 'UNSUPPORTED_CLAIM',
   DUPLICATE_TEMPLATE: 'DUPLICATE_TEMPLATE',
+  REPETITIVE_OPENING: 'REPETITIVE_OPENING',
   MISSING_RECIPIENT_ADDRESS: 'MISSING_RECIPIENT',
 };
 
@@ -102,6 +103,11 @@ const FALSE_OBSERVATION_PATTERNS = [
   /\bwhen i (went|called|visited|tested|checked out)\b/i,
   /\bi (called|rang|phoned) (your|the)\b/i,
   /\bi (looked|looks) at your (site|website) (personally|myself|in person)\b/i,
+  // §15: do not misrepresent an automated system as a human.
+  /\bi( a|')?m (a |an )?real (person|human)\b/i,
+  /\bi am (a |an )?(real )?(person|human)(,|\.|\b)/i,
+  /\b(not|no) (a )?bot\b/i,
+  /\bwritten by a (real )?(human|person)\b/i,
 ];
 
 /** Unfilled template tokens that must never reach a recipient. */
@@ -258,12 +264,23 @@ export function assessMessage(draft, {
   }
 
   if (Array.isArray(priorBodies) && priorBodies.length) {
-    const bodySet = new Set(words(body));
+    const opening = (text) => words(text).slice(0, 6).join(' ');
+    const myOpening = opening(body);
     for (const prior of priorBodies) {
       const priorTokens = new Set(words(String(prior || '')));
       if (wordCount(prior) >= MIN_WORDS && jaccard(bodyTokens, priorTokens) >= 0.8) {
         add('DUPLICATE_TEMPLATE', 'This message is nearly identical to a previous message.', 'Regenerate a message specific to this prospect.');
         break;
+      }
+    }
+    // §15: "avoid repetitive openings" — two different messages that still open
+    // with the same six words read as a template even when the rest varies.
+    if (wordCount(body) >= 6 && !issues.some((i) => i.code === 'DUPLICATE_TEMPLATE')) {
+      for (const prior of priorBodies) {
+        if (wordCount(prior) >= 6 && opening(prior) === myOpening) {
+          add('REPETITIVE_OPENING', 'This message opens with the same words as a previous message.', 'Regenerate with a different, less templated opening.');
+          break;
+        }
       }
     }
   }

@@ -89,6 +89,18 @@ test('message-quality: an identical body sent to another prospect is a template 
   assert.ok(report.issues.some((i) => i.code === 'DUPLICATE_TEMPLATE'));
 });
 
+test('message-quality: a repeated opening is flagged even when the rest differs', () => {
+  const prior = 'Hi, I noticed ABC Restaurant has no mobile viewport tag, so booking on phones is awkward and worth a quick fix.';
+  const candidate = 'Hi, I noticed ABC Restaurant has no mobile viewport tag, and a cleaner layout would help guests book on the go.';
+  const report = assessMessage({ ...GOOD, body: candidate }, ctx({ priorBodies: [prior] }));
+  assert.ok(report.issues.some((i) => i.code === 'REPETITIVE_OPENING'), JSON.stringify(report.issues));
+});
+
+test('message-quality: claiming to be a real human is rejected', () => {
+  assert.ok(assessMessage({ ...GOOD, body: `${GOOD.body} I am a real person, not a bot.` }, ctx())
+    .issues.some((i) => i.code === 'FALSE_OBSERVATION'));
+});
+
 test('message-quality: assertMessageQuality throws a permanent typed error', () => {
   assert.throws(
     () => assertMessageQuality({ subject: 'Hi', body_text: 'too short' }, ctx()),

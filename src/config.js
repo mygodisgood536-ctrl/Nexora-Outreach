@@ -225,6 +225,22 @@ export const config = {
     maxJobs: int('CRON_MAX_JOBS', 50),
   },
 
+  /**
+   * Opportunistic automation driver.
+   *
+   * Vercel's Hobby plans allow only a once-per-day Cron, which is far too
+   * coarse for window-driven scouting (§10). So on the production serverless
+   * runtime every API request best-effort advances the same idempotent tick the
+   * Cron runs: recovery, due-window discovery, follow-ups, monitoring, and a
+   * bounded drain. It is throttled per instance and fire-and-forget, so it never
+   * delays a response. Disabled in development/tests to keep them deterministic.
+   */
+  automation: {
+    autoTick: bool('AUTO_TICK', env === 'production'),
+    autoTickIntervalMs: int('AUTO_TICK_INTERVAL_MS', 5 * 60 * 1000),
+    autoTickMaxJobs: int('AUTO_TICK_MAX_JOBS', 10),
+  },
+
   research: {
     fetchDelayMs: int('RESEARCH_FETCH_DELAY_MS', 1500),
     timeoutMs: int('RESEARCH_TIMEOUT_MS', 20000),
@@ -258,6 +274,14 @@ export const config = {
       baseUrl: (process.env.PAGESPEED_BASE_URL || 'https://www.googleapis.com/pagespeedonline/v5').replace(/\/+$/, ''),
       strategy: process.env.PAGESPEED_STRATEGY || 'mobile',
       timeoutMs: int('PAGESPEED_TIMEOUT_MS', 45000),
+      /**
+       * §12 "visual hierarchy ... responsive behavior" — PageSpeed already
+       * renders the page for its audit and returns a screenshot data URI. We
+       * keep that image as first-class visual evidence. It is capped so one
+       * page cannot bloat the evidence store.
+       */
+      captureScreenshot: bool('PAGESPEED_CAPTURE_SCREENSHOT', true),
+      maxScreenshotBytes: int('PAGESPEED_MAX_SCREENSHOT_BYTES', 600000),
     },
   },
 

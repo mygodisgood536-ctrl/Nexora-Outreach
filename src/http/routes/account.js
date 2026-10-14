@@ -6,6 +6,8 @@ import {
 import { normalizeEmail } from '../../core/normalize.js';
 import config from '../../config.js';
 import { createLogger } from '../../core/logger.js';
+import { lastAudit } from '../../services/audit.js';
+import { CRON_TICK_ACTION } from './system.js';
 
 const log = createLogger('http');
 
@@ -13,10 +15,23 @@ const log = createLogger('http');
 const PUBLIC = { auth: false, csrf: false };
 
 export function registerAccountRoutes(router, system) {
-  const { auth, aiRuntime, email } = system;
+  const { auth, aiRuntime, email, db } = system;
 
-  router.get('/api/health', (ctx) => {
-    ctx.json(200, { ok: true, service: 'nexora-outreach', time: new Date().toISOString() });
+  // Public liveness + a secret-free statement of automation state, so an
+  // operator (or a monitor) can prove the worker actually runs in production
+  // instead of assuming it does.
+  router.get('/api/health', async (ctx) => {
+    const last = await lastAudit(db, CRON_TICK_ACTION);
+    ctx.json(200, {
+      ok: true,
+      service: 'nexora-outreach',
+      time: new Date().toISOString(),
+      automation: {
+        cronConfigured: Boolean(config.cron.secret),
+        autoTick: Boolean(config.automation.autoTick),
+        lastRunAt: last?.at || null,
+      },
+    });
   }, PUBLIC);
 
   router.get('/api/auth/username-available', async (ctx) => {

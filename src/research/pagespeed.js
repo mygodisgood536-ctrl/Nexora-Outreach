@@ -23,14 +23,42 @@ export function buildPagespeedUrl(url, {
   return `${baseUrl}/runPagespeed?${params.toString()}`;
 }
 
+/**
+ * Extract the rendered screenshot PageSpeed captured during its audit, when it
+ * produced one. `final-screenshot` holds the full-page image; the last
+ * `screenshot-thumbnails` frame is the fallback. The data URI is returned only
+ * when it fits the configured cap so one page cannot bloat the evidence store.
+ */
+export function extractPagespeedScreenshot(lighthouse, { maxBytes = Infinity } = {}) {
+  const audits = lighthouse?.audits || {};
+  const candidates = [
+    audits['final-screenshot']?.details,
+    audits['full-page-screenshot']?.details?.screenshot,
+    (audits['screenshot-thumbnails']?.details?.items || []).slice(-1)[0],
+  ].filter(Boolean);
+  for (const c of candidates) {
+    const dataUri = typeof c === 'string' ? c : c?.data;
+    if (typeof dataUri === 'string' && /^data:image\//.test(dataUri)) {
+      if (dataUri.length > maxBytes) return { dataUri: null, truncated: true, bytes: dataUri.length };
+      return { dataUri, width: c?.width ?? null, height: c?.height ?? null, bytes: dataUri.length };
+    }
+  }
+  return null;
+}
+
 /** Turn a raw PageSpeed response into a compact, stable evidence object. */
-export function parsePagespeed(json, { strategy = 'mobile' } = {}) {
+export function parsePagespeed(json, {
+  strategy = 'mobile',
+  captureScreenshot = config.research.pagespeed.captureScreenshot,
+  maxScreenshotBytes = config.research.pagespeed.maxScreenshotBytes,
+} = {}) {
   const lr = json?.lighthouseResult || {};
   const categories = lr.categories || {};
   const audits = lr.audits || {};
   const score = (id) => (categories[id] && typeof categories[id].score === 'number')
     ? Math.round(categories[id].score * 100) : null;
   const display = (id) => audits[id]?.displayValue ?? null;
+  const shot = captureScreenshot ? extractPagespeedScreenshot(lr, { maxBytes: maxScreenshotBytes }) : null;
   return {
     ok: true,
     strategy,
@@ -49,10 +77,9 @@ export function parsePagespeed(json, { strategy = 'mobile' } = {}) {
       totalBlockingTime: display('total-blocking-time'),
       speedIndex: display('speed-index'),
     },
-    hasRenderedScreenshot: Boolean(
-      audits['final-screenshot']?.details?.data
-      || audits['full-page-screenshot']?.details?.screenshot?.data,
-    ),
+    // Visual evidence (§12): a real rendered image, not an interpretation.
+    screenshot: shot,
+    hasRenderedScreenshot: Boolean(shot?.dataUri),
     fieldDataAvailable: Boolean(
       json?.loadingExperience?.metrics && Object.keys(json.loadingExperience.metrics).length,
     ),
@@ -71,6 +98,8 @@ export async function runPagespeed(url, {
   fetchImpl = globalThis.fetch,
   timeoutMs = config.research.pagespeed.timeoutMs,
   baseUrl = config.research.pagespeed.baseUrl,
+  captureScreenshot = config.research.pagespeed.captureScreenshot,
+  maxScreenshotBytes = config.research.pagespeed.maxScreenshotBytes,
 } = {}) {
   const endpoint = buildPagespeedUrl({ url, strategy, apiKey, baseUrl });
   let res;
@@ -97,7 +126,7 @@ export async function runPagespeed(url, {
       error: json?.error?.message || 'PageSpeed returned no Lighthouse result.',
     };
   }
-  return parsePagespeed(json, { strategy });
+  return parsePagespeed(json, { strategy, captureScreenshot, maxScreenshotBytes });
 }
 
 const signal = (ms) => (typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(ms) : undefined);

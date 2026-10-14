@@ -299,6 +299,7 @@ export async function setup({ discoveryCandidates = null, aiOverrides = {}, emai
         cumulativeLayoutShift: '0.12', totalBlockingTime: '410 ms', speedIndex: '5.4 s',
       },
       hasRenderedScreenshot: true, fieldDataAvailable: false,
+      screenshot: { dataUri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg', width: 412, height: 823, bytes: 40, strategy: 'mobile' },
       method: 'pagespeed_insights_lighthouse',
     }),
   };

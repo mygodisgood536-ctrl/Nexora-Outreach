@@ -110,6 +110,7 @@ Public routes (correctly `auth:false, csrf:false`): `/health`, `/api/health`,
 | Lead detail: qualification / why selected | `GET /api/leads/:id` | OK |
 | Structured redesign decision (§16) | `GET /api/leads/:id` → `qualification.recommended_service` (controlled enum), recorded as `audit_evidence` kind `recommendation` | OK |
 | Rendered audit: broken-link integrity + PageSpeed performance (§12) | research stage → `website_analyses.evidence.linkIntegrity` / `.performance`, surfaced in `GET /api/leads/:id` and the versioned `audit_evidence` (`link_integrity`, `performance`) | OK |
+| Rendered screenshot as visual evidence (§12) | research stage captures the PageSpeed-rendered image into `audit_evidence` kind `screenshot` (kept out of the AI-facing evidence); rendered in `GET /api/leads/:id` via `latestAudit` | OK |
 
 ---
 
@@ -173,6 +174,8 @@ Public routes (correctly `auth:false, csrf:false`): `/health`, `/api/health`,
 | Pause all automation | `POST /api/auth/automation-paused` | OK |
 | Per-mission pause/resume/stop | mission routes | OK |
 | Advance the pipeline on a schedule (serverless) | `GET`/`POST /api/cron/tick` | OK |
+| Prove the worker runs (last tick, queue depth, scheduler/worker state) | `GET /api/automation/status` (owner) + `automation` block on `/api/health` (public, secret-free) | OK |
+| Keep window-driven scouting alive despite a coarse serverless Cron | opportunistic request-driven tick (`system.opportunisticTick`, `AUTO_TICK`) | OK |
 
 ---
 

@@ -50,6 +50,12 @@ test('pipeline: a mission runs discovery -> research -> analysis -> qualificatio
   const kinds = audit.evidence.map((e) => e.kind);
   assert.ok(kinds.includes('link_integrity'), 'link integrity is a recorded evidence kind');
   assert.ok(kinds.includes('performance'), 'performance is a recorded evidence kind');
+  // §12 visual evidence: the rendered screenshot is captured and versioned, and
+  // is kept out of the AI-facing evidence object.
+  assert.ok(kinds.includes('screenshot'), 'the rendered screenshot is a recorded evidence kind');
+  const shot = audit.evidence.find((e) => e.kind === 'screenshot');
+  assert.match(shot.payload.dataUri, /^data:image\//);
+  assert.equal('screenshot' in site.evidence.performance, false, 'the image never bloats the AI evidence');
 
   const q = await system.leads.qualification(lead.id);
   assert.equal(q.qualified, 1);

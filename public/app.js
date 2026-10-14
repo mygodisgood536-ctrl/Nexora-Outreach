@@ -646,6 +646,7 @@ async function renderLeadDetail(id) {
         </div>
         ${data.websiteAnalysis.error ? `<div class="badge red" style="margin-bottom:8px">${esc(String(data.websiteAnalysis.error).slice(0, 200))}</div>` : ''}
         ${auditEnrichment(data.websiteAnalysis)}
+        ${auditScreenshot(data.latestAudit)}
         ${findingsList(data.websiteAnalysis.findings)}`
           : '<div class="faint small">Not analysed yet.</div>'}
       </div>
@@ -719,11 +720,38 @@ function auditHistory(audit) {
       <thead><tr><th>Evidence</th><th>Source</th><th>Recorded</th></tr></thead><tbody>
       ${items.map((e) => `<tr>
         <td><b class="small">${esc(kindLabel(e.kind))}</b>${e.url ? ` <a class="small faint" href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ''}
-          <div class="faint small mono" style="max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(JSON.stringify(e.payload))}</div></td>
+          <div class="faint small mono" style="max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(evidenceSummary(e))}</div></td>
         <td class="small faint">${esc(e.method || e.source || '—')}</td>
         <td class="small muted">${fmtRel(e.created_at)}</td>
       </tr>`).join('')}
     </tbody></table></div>` : '<div class="faint small">No evidence items recorded for this version.</div>'}`;
+}
+
+/** A compact one-line summary of an evidence payload; images are summarised, not dumped. */
+function evidenceSummary(e) {
+  const p = e && e.payload;
+  if (e && e.kind === 'screenshot' && p && p.dataUri) {
+    const kb = Math.round((p.bytes || 0) / 1024);
+    return `[rendered screenshot${kb ? ` · ${kb} KB` : ''}]`;
+  }
+  try { return JSON.stringify(p); } catch { return String(p); }
+}
+
+/**
+ * §12 visual evidence — show the rendered screenshot the audit captured, when
+ * one is present in the latest audit version. It is the real page as rendered,
+ * not a reconstruction.
+ */
+function auditScreenshot(audit) {
+  const items = audit && Array.isArray(audit.evidence) ? audit.evidence : [];
+  const shot = items.find((e) => e.kind === 'screenshot' && e.payload && e.payload.dataUri);
+  if (!shot) return '';
+  const p = shot.payload;
+  return `<div style="margin:10px 0">
+    <div class="card-label">Rendered screenshot${p.width ? ` · ${esc(p.width)}×${esc(p.height)}` : ''}${p.strategy ? ` · ${esc(p.strategy)}` : ''}</div>
+    <img src="${esc(p.dataUri)}" alt="Rendered screenshot of the website" loading="lazy" decoding="async"
+      style="max-width:100%;border:1px solid rgba(56,230,255,.25);border-radius:10px;margin-top:6px" />
+  </div>`;
 }
 
 /**
@@ -847,10 +875,38 @@ async function renderNotifications() {
 // ============================================================
 // SETTINGS
 // ============================================================
+/**
+ * §23/§26 — render the automation driver's real state so the operator can see
+ * the worker is actually running, rather than trusting a route exists.
+ */
+function automationStatus(a) {
+  if (!a) return '';
+  const q = a.queue || {};
+  let detail = null;
+  try { detail = a.lastRun?.detail ? JSON.parse(a.lastRun.detail) : null; } catch { detail = null; }
+  const lastWhen = a.lastRun?.at ? fmtRel(a.lastRun.at) : null;
+  const rows = [
+    ['Cron secret', a.cron?.configured ? 'configured' : 'not set'],
+    ['Request auto-tick', a.cron?.autoTick ? 'on' : 'off'],
+    ['Last automation run', lastWhen ? `${lastWhen}${detail?.drained != null ? ` · ${esc(String(detail.drained))} jobs drained` : ''}` : 'never'],
+    ['Queue', `queued ${num(q.queued || 0)} · running ${num(q.running || 0)} · retry ${num(q.waiting_retry || 0)} · failed ${num(q.failed || 0)}`],
+    ['Running missions', num(a.runningMissions || 0)],
+    ['Mailbox', a.connectedMailbox ? `connected (${esc((a.connectedProviders || []).join(', '))})` : 'not connected'],
+    ['Worker', esc(a.worker?.workerId || '—')],
+  ];
+  return `<div style="margin-top:16px">
+    <div class="card-label">Automation status</div>
+    <table class="table" style="margin-top:6px"><tbody>
+      ${rows.map(([k, v]) => `<tr><td class="small muted" style="width:44%">${k}</td><td class="small">${v}</td></tr>`).join('')}
+    </tbody></table>
+  </div>`;
+}
+
 async function renderSettings() {
-  const [ai, diag, email, suppressions] = await Promise.all([
+  const [ai, diag, email, suppressions, automation] = await Promise.all([
     api('/api/ai/settings'), api('/api/ai/diagnostics'),
     api('/api/email/connections'), api('/api/suppressions'),
+    api('/api/automation/status').catch(() => null),
   ]);
   state.email = email.providers || [];
   const sel = ai.selection || {};
@@ -933,6 +989,7 @@ async function renderSettings() {
           <button class="btn" data-act="toggle-pause">${paused ? '▶ Resume automation' : '⏸ Pause all automation'}</button>
           <span class="badge ${paused ? 'amber' : 'green'}">${paused ? 'Paused' : 'Running'}</span>
         </div>
+        ${automationStatus(automation)}
         <div class="section-head" style="margin-top:20px"><h2>Recovery code</h2></div>
         <p class="small muted">Generate a fresh one-time recovery code. Existing codes are burned.</p>
         <button class="btn" data-act="gen-recovery" style="margin-top:10px">Generate new code</button>

@@ -192,7 +192,7 @@ export async function researchHandler(ctx) {
   // §12 enrichment: broken-link integrity and rendered performance evidence.
   // Both are best-effort — an optional audit never fails the research pass — and
   // injectable so tests run offline.
-  const { linkIntegrity, performance } = await enrichWebsite(page, {
+  const { linkIntegrity, performance, screenshot } = await enrichWebsite(page, {
     services, log: ctx.log,
   });
   if (linkIntegrity) evidence.linkIntegrity = linkIntegrity;
@@ -230,6 +230,16 @@ export async function researchHandler(ctx) {
       url: page.url, payload: performance,
     });
   }
+  // §12 visual evidence: the rendered screenshot PageSpeed captured. Kept as
+  // its own immutable evidence item and deliberately kept OUT of the
+  // AI-facing `evidence` object so a large image never bloats a prompt.
+  if (screenshot?.dataUri) {
+    await record({
+      kind: 'screenshot', source: lead.discovery_source,
+      method: 'pagespeed_rendered_screenshot',
+      url: page.url, payload: screenshot,
+    });
+  }
   await ctx.heartbeat();
   await enqueueAnalysis();
 
@@ -243,7 +253,7 @@ export async function researchHandler(ctx) {
  * `services.research.pagespeed`) to keep the pipeline exercisable offline.
  */
 async function enrichWebsite(page, { services, log }) {
-  const out = { linkIntegrity: null, performance: null };
+  const out = { linkIntegrity: null, performance: null, screenshot: null };
 
   if (config.research.linkCheck.enabled) {
     const checkLinks = services.research?.checkLinks ?? defaultCheckLinks;
@@ -258,11 +268,17 @@ async function enrichWebsite(page, { services, log }) {
     const pagespeed = services.research?.pagespeed ?? runPagespeed;
     try {
       const result = await pagespeed(page.url);
-      // A failed audit is still recorded as evidence, so the operator can see
-      // that performance could not be measured (and why).
-      out.performance = result?.ok === false
-        ? { ok: false, code: result.code || 'PAGESPEED_ERROR', error: result.error, strategy: result.strategy }
-        : result;
+      if (result?.ok === false) {
+        // A failed audit is still recorded as evidence, so the operator can see
+        // that performance could not be measured (and why).
+        out.performance = { ok: false, code: result.code || 'PAGESPEED_ERROR', error: result.error, strategy: result.strategy };
+      } else if (result) {
+        // Split the screenshot from the metrics: metrics join the AI-facing
+        // evidence, the image is stored separately as visual evidence (§12).
+        const { screenshot, ...metrics } = result;
+        out.performance = metrics;
+        if (screenshot?.dataUri) out.screenshot = { ...screenshot, strategy: result.strategy };
+      }
     } catch (e) {
       log?.info(`performance audit skipped for ${page.url}: ${e.message}`);
     }

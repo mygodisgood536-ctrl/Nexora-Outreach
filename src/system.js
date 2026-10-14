@@ -78,7 +78,39 @@ export function createSystem({ db, config: cfg = config, overrides = {} } = {}) 
 
   const scheduler = new Scheduler({ db: database, queue, missions });
 
-  return { db: database, config: cfg, services, worker, scheduler, queue, ...services };
+  /**
+   * Opportunistic automation driver (§10/§26/§30).
+   *
+   * On a serverless host the Cron may only fire once a day, which cannot honour
+   * time-window scouting. This runs the exact same idempotent tick the Cron
+   * runs — recovery, due-window discovery, follow-ups, monitoring, bounded
+   * drain — on ordinary API traffic. It is throttled per warm instance and
+   * never awaited by a request, so it cannot affect request latency. The atomic
+   * queue claims make concurrent instances safe.
+   */
+  let autoTickAt = 0;
+  let autoTickInFlight = false;
+  const autoTick = async () => {
+    const opts = cfg.automation || {};
+    if (!opts.autoTick) return null;
+    const now = Date.now();
+    if (autoTickInFlight || now - autoTickAt < (cfg.automation.autoTickIntervalMs || 0)) return null;
+    autoTickAt = now;
+    autoTickInFlight = true;
+    try {
+      const scouted = await scheduler.tick();
+      const drained = await worker.drain({ maxJobs: cfg.automation.autoTickMaxJobs || 10 });
+      return { scouted: scouted.length, drained: drained.length };
+    } finally {
+      autoTickInFlight = false;
+    }
+  };
+
+  return {
+    db: database, config: cfg, services, worker, scheduler, queue,
+    opportunisticTick: autoTick,
+    ...services,
+  };
 }
 
 export default createSystem;

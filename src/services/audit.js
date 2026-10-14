@@ -9,6 +9,18 @@ const log = createLogger('audit');
  * An audit failure must never break the operation being audited — the failure
  * itself is logged so it can be investigated rather than silently dropped.
  */
+/** The most recent event for an action, or null. Never throws on read. */
+export async function lastAudit(db, action) {
+  try {
+    const row = await db.get(
+      'SELECT * FROM audit_events WHERE action = ? ORDER BY id DESC LIMIT 1', action,
+    );
+    return row || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function recordAudit(db, {
   userId = null, actor = 'system', action, entityType = null,
   entityId = null, detail = null, ip = null,

@@ -21,6 +21,7 @@ export const EVIDENCE_KIND = {
   VERIFICATION: 'verification',
   LINK_INTEGRITY: 'link_integrity',
   PERFORMANCE: 'performance',
+  SCREENSHOT: 'screenshot',
   QUALIFICATION: 'qualification',
 };
 

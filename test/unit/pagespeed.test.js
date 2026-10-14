@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildPagespeedUrl, parsePagespeed, runPagespeed } from '../../src/research/pagespeed.js';
+import {
+  buildPagespeedUrl, parsePagespeed, runPagespeed, extractPagespeedScreenshot,
+} from '../../src/research/pagespeed.js';
 
 const RESPONSE = {
   id: 'https://abcrestaurant.com/',
@@ -54,6 +56,25 @@ test('pagespeed: parses scores, vitals, screenshot and field data', () => {
   assert.equal(e.hasRenderedScreenshot, true);
   assert.equal(e.fieldDataAvailable, true);
   assert.equal(e.method, 'pagespeed_insights_lighthouse');
+  // §12 visual evidence: the rendered screenshot is captured, not just a flag.
+  assert.equal(e.screenshot.dataUri, 'data:image/jpeg;base64,AAAA');
+});
+
+test('pagespeed: the screenshot is withheld when it exceeds the size cap', () => {
+  const lighthouse = {
+    audits: { 'final-screenshot': { details: { data: `data:image/png;base64,${'A'.repeat(500)}` } } },
+  };
+  const shot = extractPagespeedScreenshot(lighthouse, { maxBytes: 100 });
+  assert.equal(shot.dataUri, null);
+  assert.equal(shot.truncated, true);
+  const e = parsePagespeed(RESPONSE, { maxScreenshotBytes: 5 });
+  assert.equal(e.hasRenderedScreenshot, false);
+});
+
+test('pagespeed: capture can be switched off entirely', () => {
+  const e = parsePagespeed(RESPONSE, { captureScreenshot: false });
+  assert.equal(e.screenshot, null);
+  assert.equal(e.hasRenderedScreenshot, false);
 });
 
 test('pagespeed: a provider error is reported, never thrown', async () => {

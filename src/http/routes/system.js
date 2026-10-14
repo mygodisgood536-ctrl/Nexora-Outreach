@@ -1,10 +1,14 @@
 import { createLogger } from '../../core/logger.js';
 import config from '../../config.js';
+import { requireUser } from '../middleware.js';
+import { recordAudit, lastAudit } from '../../services/audit.js';
 
 const log = createLogger('cron');
 
 /** Anonymous is fine: the shared secret is the authentication. */
 const PUBLIC = { auth: false, csrf: false };
+/** The action name every automation tick is recorded under, for observability. */
+export const CRON_TICK_ACTION = 'cron.tick';
 
 /**
  * §26 — the serverless automation driver.
@@ -16,7 +20,9 @@ const PUBLIC = { auth: false, csrf: false };
  * idempotent, so overlapping or missed ticks are harmless.
  */
 export function registerSystemRoutes(router, system) {
-  const { scheduler, worker, queue } = system;
+  const {
+    scheduler, worker, queue, db,
+  } = system;
 
   const runTick = async (ctx) => {
     const supplied = String(ctx.req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -33,6 +39,15 @@ export function registerSystemRoutes(router, system) {
     const drained = await worker.drain({ maxJobs: config.cron.maxJobs });
     const stats = await queue.stats({});
     log.info(`cron tick: scouted ${scouted.length}, drained ${drained.length}`, { queued: stats.queued });
+    // Persist the run so production execution is provable from the API rather
+    // than inferred from a route merely existing (§23/§26 observability).
+    await recordAudit(db, {
+      actor: 'cron',
+      action: CRON_TICK_ACTION,
+      detail: {
+        scouted: scouted.length, drained: drained.length, queued: stats.queued, at: new Date().toISOString(),
+      },
+    });
     ctx.json(200, {
       ok: true,
       scouted: scouted.length,
@@ -43,6 +58,29 @@ export function registerSystemRoutes(router, system) {
 
   router.get('/api/cron/tick', runTick, PUBLIC);
   router.post('/api/cron/tick', runTick, PUBLIC);
+
+  /**
+   * §23/§26 observability — proof, from the API, that automation is actually
+   * running, rather than inferring it from a route merely existing.
+   */
+  router.get('/api/automation/status', async (ctx) => {
+    const user = requireUser(ctx);
+    const lastRun = await lastAudit(db, CRON_TICK_ACTION);
+    const emailState = await system.email.statusFor(user.id);
+    const connected = emailState.filter((p) => p.connection?.status === 'connected');
+    const missions = await system.missions.list(user.id);
+    const running = missions.filter((m) => ['scheduled', 'running'].includes(m.status));
+    ctx.json(200, {
+      cron: { configured: Boolean(config.cron.secret), autoTick: Boolean(config.automation.autoTick) },
+      lastRun,
+      scheduler: { pollMs: scheduler.pollMs, running: scheduler.running },
+      worker: { workerId: worker.workerId, processed: worker.processed },
+      queue: await queue.stats({ userId: user.id }),
+      runningMissions: running.length,
+      connectedMailbox: connected.length > 0,
+      connectedProviders: connected.map((p) => p.id),
+    });
+  });
 }
 
 function timingSafeEqual(a, b) {

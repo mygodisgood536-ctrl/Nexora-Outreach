@@ -41,6 +41,19 @@ export function createHandler(system) {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
+    // Opportunistic automation driver: on serverless hosts a once-daily Cron is
+    // too coarse for window-driven scouting (§10), so every API request
+    // best-effort advances the same idempotent tick. Fire-and-forget and
+    // throttled, so it never delays a response; the Cron remains the guarantee.
+    if (system.opportunisticTick
+      && pathname.startsWith('/api/')
+      && pathname !== '/api/cron/tick'
+      && pathname !== '/api/health') {
+      Promise.resolve()
+        .then(() => system.opportunisticTick())
+        .catch((e) => log.warn(`opportunistic automation tick failed: ${e?.message}`));
+    }
+
     const cookies = parseCookies(req.headers.cookie);
     const token = cookies[config.sessionCookieName] || null;
 

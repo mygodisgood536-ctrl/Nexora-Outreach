@@ -53,20 +53,24 @@ export function createHandler(system) {
     const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
     // Opportunistic automation driver: on serverless hosts a once-daily Cron is
-    // too coarse for window-driven scouting (§10), so every API request
-    // best-effort advances the same idempotent tick. Fire-and-forget and
-    // throttled, so it never delays a response; the Cron remains the guarantee.
+    // too coarse for window-driven scouting (§10), so API traffic best-effort
+    // advances the same idempotent tick. The throttle means only the one request
+    // per interval does real work; that request waits briefly so scheduling and
+    // the run's audit row are committed within the request, while `waitUntil`
+    // keeps the heavier drain alive after the response. The Cron stays the
+    // guarantee.
     if (system.opportunisticTick
       && pathname.startsWith('/api/')
       && pathname !== '/api/cron/tick'
       && pathname !== '/api/health') {
       const tick = Promise.resolve()
         .then(() => system.opportunisticTick())
-        .catch((e) => log.warn(`opportunistic automation tick failed: ${e?.message}`));
-      // Keep the serverless function alive until the tick settles.
+        .catch((e) => { log.warn(`opportunistic automation tick failed: ${e?.message}`); return null; });
       if (waitUntil) {
         try { waitUntil(tick); } catch { /* not in a Vercel request context */ }
       }
+      // Bounded: never let a slow drain hold the response open.
+      await Promise.race([tick, new Promise((r) => { const t = setTimeout(r, 3000); if (t.unref) t.unref(); })]);
     }
 
     const cookies = parseCookies(req.headers.cookie);

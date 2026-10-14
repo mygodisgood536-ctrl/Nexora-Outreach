@@ -100,14 +100,21 @@ export function createSystem({ db, config: cfg = config, overrides = {} } = {}) 
     autoTickInFlight = true;
     try {
       const scouted = await scheduler.tick();
-      const drained = await worker.drain({ maxJobs: cfg.automation.autoTickMaxJobs || 10 });
-      // Record the same audit row the Cron route writes, so `lastRunAt` proves
-      // automation ran even when the opportunistic path, not the Cron, drove it.
+      // Record the run as soon as scheduling completes — before the heavier
+      // drain — so a run is provable from the API even if the drain is cut
+      // short by a serverless freeze or fails. The Cron route records too.
       await recordAudit(database, {
         actor: 'system', action: CRON_TICK_ACTION,
-        detail: { source: 'opportunistic', scouted: scouted.length, drained: drained.length },
+        detail: { source: 'opportunistic', phase: 'scheduled', scouted: scouted.length },
       });
+      const drained = await worker.drain({ maxJobs: cfg.automation.autoTickMaxJobs || 10 });
       return { scouted: scouted.length, drained: drained.length };
+    } catch (e) {
+      await recordAudit(database, {
+        actor: 'system', action: CRON_TICK_ACTION,
+        detail: { source: 'opportunistic', error: e?.message || String(e) },
+      });
+      throw e;
     } finally {
       autoTickInFlight = false;
     }

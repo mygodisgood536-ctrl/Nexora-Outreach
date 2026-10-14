@@ -283,6 +283,23 @@ export async function setup({ discoveryCandidates = null, aiOverrides = {}, emai
       }
       return { url, status: 200, contentType: 'text/html', body: SITE_HTML, bytes: SITE_HTML.length };
     },
+    // §12 enrichment fakes: deterministic, offline, but shaped exactly like the
+    // real clients so the handler merge is exercised for real.
+    checkLinks: async (html, url) => ({
+      checked: 3, brokenCount: 1, unreachableCount: 0,
+      broken: [{ url: `${url}/menu`, status: 404 }], unreachable: [],
+      method: 'http_link_probe_without_javascript',
+    }),
+    pagespeed: async (url) => ({
+      ok: true, strategy: 'mobile', finalUrl: url, fetchTime: '2026-01-01T00:00:00.000Z',
+      scores: { performance: 38, accessibility: 90, bestPractices: 83, seo: 92 },
+      vitals: {
+        firstContentfulPaint: '2.1 s', largestContentfulPaint: '4.8 s',
+        cumulativeLayoutShift: '0.12', totalBlockingTime: '410 ms', speedIndex: '5.4 s',
+      },
+      hasRenderedScreenshot: true, fieldDataAvailable: false,
+      method: 'pagespeed_insights_lighthouse',
+    }),
   };
 
   const discovery = {

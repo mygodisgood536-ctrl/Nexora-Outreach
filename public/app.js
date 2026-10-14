@@ -645,6 +645,7 @@ async function renderLeadDetail(id) {
           <div><div class="card-label">Status</div><div class="mono" style="font-size:22px">${data.websiteAnalysis.ok ? 'ok' : 'failed'}</div></div>
         </div>
         ${data.websiteAnalysis.error ? `<div class="badge red" style="margin-bottom:8px">${esc(String(data.websiteAnalysis.error).slice(0, 200))}</div>` : ''}
+        ${auditEnrichment(data.websiteAnalysis)}
         ${findingsList(data.websiteAnalysis.findings)}`
           : '<div class="faint small">Not analysed yet.</div>'}
       </div>
@@ -722,6 +723,39 @@ function auditHistory(audit) {
         <td class="small muted">${fmtRel(e.created_at)}</td>
       </tr>`).join('')}
     </tbody></table></div>` : '<div class="faint small">No evidence items recorded for this version.</div>'}`;
+}
+
+/**
+ * Renders the §12 enrichment evidence (rendered performance + link integrity)
+ * captured for a website, when it is present. Everything shown is a recording
+ * of what the audit measured, not an interpretation.
+ */
+function auditEnrichment(site) {
+  const ev = site && site.evidence;
+  if (!ev || typeof ev !== 'object') return '';
+  const perf = ev.performance;
+  const links = ev.linkIntegrity;
+  if (!perf && !links) return '';
+  const chips = [];
+  if (perf) {
+    if (perf.ok === false) {
+      chips.push(`<div class="badge red" style="margin:4px 0">Performance not measured · ${esc(String(perf.error || perf.code || 'unavailable').slice(0, 120))}</div>`);
+    } else {
+      const s = perf.scores || {};
+      const chip = (label, value) => `<div><div class="card-label">${label}</div><div class="mono" style="font-size:18px">${value == null ? '—' : esc(value)}</div></div>`;
+      chips.push(`<div class="row" style="gap:16px;margin:6px 0">${chip('Performance', s.performance)}${chip('Accessibility', s.accessibility)}${chip('SEO', s.seo)}</div>`);
+      const v = perf.vitals || {};
+      const vitals = [v.largestContentfulPaint && `LCP ${v.largestContentfulPaint}`, v.cumulativeLayoutShift && `CLS ${v.cumulativeLayoutShift}`, v.totalBlockingTime && `TBT ${v.totalBlockingTime}`].filter(Boolean);
+      if (vitals.length) chips.push(`<div class="faint small">${esc(vitals.join(' · '))}${perf.hasRenderedScreenshot ? ' · rendered screenshot captured' : ''}</div>`);
+    }
+  }
+  if (links) {
+    const bad = Number(links.brokenCount || 0);
+    chips.push(bad
+      ? `<div class="badge red" style="margin-top:6px">${bad} broken same-origin link${bad === 1 ? '' : 's'} detected</div>`
+      : `<div class="small muted" style="margin-top:6px">No broken links detected (${esc(links.checked || 0)} checked)</div>`);
+  }
+  return `<div style="margin:8px 0">${chips.join('')}</div>`;
 }
 
 /** Renders an analysis `findings` value, which may be an array or a summary object. */

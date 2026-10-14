@@ -145,5 +145,16 @@ export function heuristicScore(e) {
   if (e.visibleTextLength < 300) score -= 15;
   if (e.images > 0 && e.imagesMissingAlt / e.images > 0.5) score -= 5;
   if (!e.mailtoAddresses.length && !e.telNumbers.length) score -= 10;
+  // §12 optional enrichment: broken links and measured performance, when the
+  // research pass was able to collect them. Absent evidence is never penalised.
+  if (e.linkIntegrity && e.linkIntegrity.brokenCount > 0) {
+    score -= Math.min(15, e.linkIntegrity.brokenCount * 5);
+  }
+  const perf = e.performance?.scores?.performance;
+  if (typeof perf === 'number') {
+    if (perf < 50) score -= 15;
+    else if (perf < 70) score -= 8;
+    else if (perf < 90) score -= 3;
+  }
   return Math.max(0, Math.min(100, score));
 }

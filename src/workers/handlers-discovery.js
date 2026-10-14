@@ -1,7 +1,10 @@
 import { STAGE } from './queue.js';
 import { err } from '../core/errors.js';
-import { discoverViaOverpass, resolveBusinessTypes } from '../discovery/overpass.js';
+import config from '../config.js';
+import { resolveBusinessTypes, discoverViaOverpass } from '../discovery/overpass.js';
 import { fetchUrl } from '../research/fetcher.js';
+import { checkLinks as defaultCheckLinks } from '../research/link-check.js';
+import { runPagespeed } from '../research/pagespeed.js';
 import { extractWebsiteEvidence, heuristicScore } from '../research/website-analysis.js';
 import { nowSqlite } from '../core/time.js';
 
@@ -185,10 +188,24 @@ export async function researchHandler(ctx) {
   const evidence = extractWebsiteEvidence(page.body, {
     url: page.url, bytes: page.bytes, contentType: page.contentType,
   });
+
+  // §12 enrichment: broken-link integrity and rendered performance evidence.
+  // Both are best-effort — an optional audit never fails the research pass — and
+  // injectable so tests run offline.
+  const { linkIntegrity, performance } = await enrichWebsite(page, {
+    services, log: ctx.log,
+  });
+  if (linkIntegrity) evidence.linkIntegrity = linkIntegrity;
+  if (performance) evidence.performance = performance;
+
   const score = heuristicScore(evidence);
   await leads.saveWebsiteAnalysis(lead.id, {
     ok: true, url: page.url, evidence,
-    findings: { heuristicScore: score },
+    findings: {
+      heuristicScore: score,
+      brokenLinkCount: linkIntegrity?.brokenCount ?? null,
+      performanceScore: performance?.scores?.performance ?? null,
+    },
     score, method: evidence.analysisMethod,
     fetchedMs: Date.now() - startedAt,
   });
@@ -200,8 +217,56 @@ export async function researchHandler(ctx) {
     url: page.url,
     payload: { hasWebsite: true, bytes: page.bytes, httpStatus: page.status ?? null, heuristicScore: score },
   });
+  if (linkIntegrity) {
+    await record({
+      kind: 'link_integrity', source: lead.discovery_source,
+      method: linkIntegrity.method, url: page.url, payload: linkIntegrity,
+    });
+  }
+  if (performance) {
+    await record({
+      kind: 'performance', source: lead.discovery_source,
+      method: performance.method || 'pagespeed_insights_lighthouse',
+      url: page.url, payload: performance,
+    });
+  }
   await ctx.heartbeat();
   await enqueueAnalysis();
 
   return { leadId: lead.id, hasWebsite: true, bytes: page.bytes, score };
+}
+
+/**
+ * Collect the optional rendered audits for a page. Each source is isolated so a
+ * failure in one never discards the other or the HTTP evidence already recorded.
+ * The audit clients are injectable (`services.research.checkLinks`,
+ * `services.research.pagespeed`) to keep the pipeline exercisable offline.
+ */
+async function enrichWebsite(page, { services, log }) {
+  const out = { linkIntegrity: null, performance: null };
+
+  if (config.research.linkCheck.enabled) {
+    const checkLinks = services.research?.checkLinks ?? defaultCheckLinks;
+    try {
+      out.linkIntegrity = await checkLinks(page.body, page.url);
+    } catch (e) {
+      log?.info(`link integrity check skipped for ${page.url}: ${e.message}`);
+    }
+  }
+
+  if (config.research.pagespeed.enabled) {
+    const pagespeed = services.research?.pagespeed ?? runPagespeed;
+    try {
+      const result = await pagespeed(page.url);
+      // A failed audit is still recorded as evidence, so the operator can see
+      // that performance could not be measured (and why).
+      out.performance = result?.ok === false
+        ? { ok: false, code: result.code || 'PAGESPEED_ERROR', error: result.error, strategy: result.strategy }
+        : result;
+    } catch (e) {
+      log?.info(`performance audit skipped for ${page.url}: ${e.message}`);
+    }
+  }
+
+  return out;
 }

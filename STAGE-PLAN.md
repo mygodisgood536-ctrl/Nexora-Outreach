@@ -418,6 +418,22 @@ credential-gated).** See `evidence/FINAL-REPORT.md`.
 
 ---
 
+## Post-certification increments
+
+Verified additions after the initial certification. Each is implemented,
+tested, and verified live.
+
+| Increment | What it adds | Where | Tests |
+|---|---|---|---|
+| Versioned audit evidence + failure/recovery UI | Immutable audit versions, per-item SHA-256 evidence, `describeFailure` retry-safety, evidence UI | `src/services/evidence.js`, `src/core/errors.js`, `public/app.js` | `evidence`, `failures`, `prospect` |
+| Rendered website audit (§12) | Broken same-origin link integrity + PageSpeed Insights performance evidence, recorded as versioned audit evidence and shown on the lead | `src/research/link-check.js`, `src/research/pagespeed.js`, `src/workers/handlers-discovery.js` | `link-check`, `pagespeed`, `pipeline` |
+
+PageSpeed Insights runs keyless (community rate limit); `PAGESPEED_API_KEY`
+raises the quota and is optional. When the audit cannot run, the failure is
+recorded as evidence rather than hidden.
+
+---
+
 ## Stage 1 Evidence (locked 2026-10-04)
 
 **Repository hygiene**

@@ -234,6 +234,31 @@ export const config = {
     // HTTP 406, so this identifies the crawler honestly (spec §24).
     userAgent: process.env.RESEARCH_USER_AGENT
       || 'NexoraOutreach/1.0 (autonomous prospecting research; https://nexora.example/bot)',
+
+    /**
+     * §12 "broken links/pages where detectable" — a bounded, polite crawl of
+     * the site's own links. Off-site links are never probed (they belong to
+     * third parties, §24) and the count is capped so one bad site cannot turn a
+     * research pass into a crawl.
+     */
+    linkCheck: {
+      enabled: bool('LINK_CHECK_ENABLED', true),
+      maxLinks: int('LINK_CHECK_MAX_LINKS', 6),
+      timeoutMs: int('LINK_CHECK_TIMEOUT_MS', 8000),
+    },
+
+    /**
+     * §12 "basic performance indicators where safely measurable" — the public
+     * PageSpeed Insights API. It works without a key at community rate limits;
+     * a `PAGESPEED_API_KEY` raises the quota. Never a paid provider requirement.
+     */
+    pagespeed: {
+      enabled: bool('PAGESPEED_ENABLED', true),
+      apiKey: process.env.PAGESPEED_API_KEY || '',
+      baseUrl: (process.env.PAGESPEED_BASE_URL || 'https://www.googleapis.com/pagespeedonline/v5').replace(/\/+$/, ''),
+      strategy: process.env.PAGESPEED_STRATEGY || 'mobile',
+      timeoutMs: int('PAGESPEED_TIMEOUT_MS', 45000),
+    },
   },
 
   limits: {

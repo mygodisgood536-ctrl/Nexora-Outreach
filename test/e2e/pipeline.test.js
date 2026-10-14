@@ -41,6 +41,15 @@ test('pipeline: a mission runs discovery -> research -> analysis -> qualificatio
   assert.equal(site.ok, 1);
   assert.equal(site.evidence.hasViewportMeta, false, 'the HTML really lacks a viewport meta tag');
   assert.deepEqual(site.evidence.mailtoAddresses, ['hello@abcrestaurant.com']);
+  // §12 enrichment: link integrity and rendered performance are recorded too.
+  assert.equal(site.evidence.linkIntegrity.brokenCount, 1, 'a broken same-origin link is recorded');
+  assert.equal(site.evidence.performance.scores.performance, 38, 'rendered performance is recorded');
+
+  // The enrichment is also captured as versioned audit evidence (§30).
+  const audit = await system.evidence.latestForLead(lead.id);
+  const kinds = audit.evidence.map((e) => e.kind);
+  assert.ok(kinds.includes('link_integrity'), 'link integrity is a recorded evidence kind');
+  assert.ok(kinds.includes('performance'), 'performance is a recorded evidence kind');
 
   const q = await system.leads.qualification(lead.id);
   assert.equal(q.qualified, 1);

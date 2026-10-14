@@ -108,6 +108,7 @@ Public routes (correctly `auth:false, csrf:false`): `/health`, `/api/health`,
 | Lead detail: identity, location, source, contact route | `GET /api/leads/:id` | OK |
 | Lead detail: website + presence analysis | `GET /api/leads/:id` | OK |
 | Lead detail: qualification / why selected | `GET /api/leads/:id` | OK |
+| Rendered audit: broken-link integrity + PageSpeed performance (§12) | research stage → `website_analyses.evidence.linkIntegrity` / `.performance`, surfaced in `GET /api/leads/:id` and the versioned `audit_evidence` (`link_integrity`, `performance`) | OK |
 
 ---
 

@@ -168,3 +168,9 @@ export function __clearCaches() {
   lastRequestAt.clear();
   robotsCache.clear();
 }
+
+/**
+ * Whether the crawler is allowed to request a URL under the site's robots.txt.
+ * Exported so other bounded probes (link integrity, §12) honour the same rule.
+ */
+export function robotsAllows(url) { return isAllowed(url); }

@@ -19,6 +19,8 @@ export const EVIDENCE_KIND = {
   PRESENCE: 'presence',
   RECOMMENDATION: 'recommendation',
   VERIFICATION: 'verification',
+  LINK_INTEGRITY: 'link_integrity',
+  PERFORMANCE: 'performance',
   QUALIFICATION: 'qualification',
 };
 

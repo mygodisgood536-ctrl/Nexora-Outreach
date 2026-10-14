@@ -238,7 +238,7 @@ export const config = {
   automation: {
     autoTick: bool('AUTO_TICK', env === 'production'),
     autoTickIntervalMs: int('AUTO_TICK_INTERVAL_MS', 5 * 60 * 1000),
-    autoTickMaxJobs: int('AUTO_TICK_MAX_JOBS', 10),
+    autoTickMaxJobs: int('AUTO_TICK_MAX_JOBS', 5),
   },
 
   research: {

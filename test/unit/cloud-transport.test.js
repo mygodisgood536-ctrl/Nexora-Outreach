@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { OpenCodeCloudTransport, familyOf } from '../../src/ai/cloud-transport.js';
+import { OpenCodeCloudTransport, familyOf, isCreditsExhausted } from '../../src/ai/cloud-transport.js';
 import { createTransport } from '../../src/ai/transport.js';
 import { AppError } from '../../src/core/errors.js';
 
@@ -192,6 +192,37 @@ test('cloud: failures map onto the shared retry taxonomy', async () => {
   });
   await assert.rejects(() => down.version(),
     (e) => e instanceof AppError && e.code === 'AI_PROVIDER_ERROR' && e.retryable);
+});
+
+test('cloud: credits/quota exhaustion maps to the permanent AI_CREDITS_EXHAUSTED code', async () => {
+  assert.equal(isCreditsExhausted(402, ''), true);
+  assert.equal(isCreditsExhausted(400, '{"error":"insufficient_quota"}'), true);
+  assert.equal(isCreditsExhausted(400, 'Your credit balance is too low'), true);
+  assert.equal(isCreditsExhausted(429, 'rate limited'), false);
+
+  for (const [status, body] of [[402, 'payment required'], [400, '{"error":{"message":"insufficient_quota"}}']]) {
+    const t = new OpenCodeCloudTransport({
+      apiKey: KEY,
+      fetchImpl: stubFetch(() => new Response(body, { status, headers: { 'content-type': 'application/json' } })),
+    });
+    await assert.rejects(() => t.version(), (e) => {
+      assert.equal(e.code, 'AI_CREDITS_EXHAUSTED');
+      assert.equal(e.retryable, false, 'credits exhaustion must not be retried forever');
+      return true;
+    });
+  }
+
+  // The same mapping applies on the inference path, not just the config check.
+  const infer = new OpenCodeCloudTransport({
+    apiKey: KEY,
+    fetchImpl: stubFetch((req) => (req.url.endsWith('/api/v2/config')
+      ? json(CONFIG)
+      : json({ error: 'insufficient_quota' }, 402))),
+  });
+  await assert.rejects(
+    () => infer.runPrompt('hi', { model: 'opencode/space-bunny-free' }),
+    (e) => e.code === 'AI_CREDITS_EXHAUSTED' && e.permanent === true,
+  );
 });
 
 test('cloud: runPrompt without a model is an AI error', async () => {

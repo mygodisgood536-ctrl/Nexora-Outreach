@@ -24,6 +24,10 @@ const PERMANENT = new Set([
   'DUPLICATE',
   'AI_INVALID_OUTPUT',
   'AI_MODEL_UNAVAILABLE',
+  // The provider refused the request because the workspace is out of credits or
+  // quota. Retrying cannot succeed until the account is topped up, so it must
+  // not be hammered by the retry loop (spec §30).
+  'AI_CREDITS_EXHAUSTED',
   'NOT_QUALIFIED',
   'NO_CONTACT_ROUTE',
   'MAILBOX_NOT_CONNECTED',
@@ -107,6 +111,8 @@ export function userFacingMessage(error) {
       case 'NO_CONTACT_ROUTE': return 'No verified public contact route was found for this business.';
       case 'AI_PROVIDER_ERROR': return 'The AI provider could not complete this step. It will retry automatically.';
       case 'AI_MODEL_UNAVAILABLE': return 'The selected AI model is not available to this workspace. Choose another model in Settings.';
+      case 'AI_CREDITS_EXHAUSTED': return 'The AI provider ran out of credits or quota for this workspace.';
+      case 'AI_INVALID_OUTPUT': return 'The AI returned a response that could not be used. This step needs a retry after the prompt is reviewed.';
       case 'AI_TIMEOUT': return 'The AI step timed out and will be retried.';
       case 'TIMEOUT': return 'A network request timed out.';
       case 'HTTP_429': return 'A provider rate limit was reached. Work will resume automatically.';
@@ -123,4 +129,138 @@ export function userFacingMessage(error) {
     }
   }
   return 'An unexpected error occurred.';
+}
+
+/**
+ * Operator-facing explanation of a failure (spec §30): what failed, why, what it
+ * affected, and whether retrying is safe. Computed server-side so the API never
+ * has to leak internals to the browser and every surface explains failures the
+ * same way.
+ */
+const FAILURE_GUIDANCE = {
+  AI_CREDITS_EXHAUSTED: {
+    title: 'AI credits exhausted',
+    detail: 'The AI provider rejected this step because the workspace has no credits or quota left.',
+    action: 'Add credits or raise the quota with the AI provider, then retry this job.',
+  },
+  AI_MODEL_UNAVAILABLE: {
+    title: 'AI model unavailable',
+    detail: 'The selected AI model is disabled or not permitted for this workspace.',
+    action: 'Choose another model in Control → AI, then retry.',
+  },
+  AI_INVALID_OUTPUT: {
+    title: 'Unusable AI output',
+    detail: 'The AI returned output that failed validation, so nothing was recorded.',
+    action: 'Retry the job; if it keeps failing, simplify the mission instructions.',
+  },
+  AI_PROVIDER_ERROR: {
+    title: 'AI provider error',
+    detail: 'The AI provider could not complete the request.',
+    action: 'This retries automatically with bounded backoff.',
+  },
+  AI_TIMEOUT: {
+    title: 'AI step timed out',
+    detail: 'The AI provider did not answer within the time budget.',
+    action: 'This retries automatically with bounded backoff.',
+  },
+  UNAUTHENTICATED: {
+    title: 'AI key rejected',
+    detail: 'The OpenCode Cloud service-account key was rejected.',
+    action: 'Update OPENCODE_API_KEY, then retry.',
+  },
+  MAILBOX_NOT_CONNECTED: {
+    title: 'Mailbox not connected',
+    detail: 'No authorized mailbox is connected, so nothing could be sent.',
+    action: 'Connect an authorized mailbox, then retry.',
+  },
+  MAILBOX_AUTH_EXPIRED: {
+    title: 'Mailbox authorization expired',
+    detail: 'The mailbox token is no longer valid, so sending stopped.',
+    action: 'Reconnect the mailbox, then retry.',
+  },
+  SUPPRESSED: {
+    title: 'Recipient suppressed',
+    detail: 'This recipient opted out, bounced, or complained, so nothing was sent.',
+    action: 'Retry is not safe — do not contact this recipient again.',
+  },
+  DUPLICATE: {
+    title: 'Already contacted',
+    detail: 'This business was already contacted, so it was skipped.',
+    action: 'Retry is not needed.',
+  },
+  NO_CONTACT_ROUTE: {
+    title: 'No contact route',
+    detail: 'No verified public contact route was found for this business.',
+    action: 'Record a public contact route, then retry.',
+  },
+  NOT_QUALIFIED: {
+    title: 'Not qualified',
+    detail: 'The evidence did not support a contactable opportunity for this business.',
+    action: 'Retry is not safe — this business is intentionally excluded.',
+  },
+  HOURLY_LIMIT_REACHED: {
+    title: 'Hourly sending limit reached',
+    detail: 'The mission reached its hourly send cap.',
+    action: 'Sending resumes automatically when the window resets.',
+  },
+  PACING_WAIT: {
+    title: 'Pacing delay',
+    detail: 'A minimum gap between sends is in effect.',
+    action: 'Sending resumes automatically.',
+  },
+  CAMPAIGN_NOT_STARTED: {
+    title: 'Campaign not started',
+    detail: 'The campaign start date has not been reached yet.',
+    action: 'Sending begins automatically on the start date.',
+  },
+  CAMPAIGN_ENDED: {
+    title: 'Campaign ended',
+    detail: 'The campaign end date has passed.',
+    action: 'Retry is not safe; extend the end date to resume.',
+  },
+  RECIPIENT_COOLDOWN: {
+    title: 'Recipient cooldown',
+    detail: 'This recipient was contacted too recently.',
+    action: 'Sending resumes automatically after the cooldown.',
+  },
+  DISCOVERY_HTTP_ERROR: {
+    title: 'Discovery source unavailable',
+    detail: 'The discovery source is busy or rate limiting.',
+    action: 'This retries automatically.',
+  },
+  DISCOVERY_TIMEOUT: {
+    title: 'Discovery source timed out',
+    detail: 'The discovery source did not answer in time.',
+    action: 'This retries automatically.',
+  },
+  HTTP_429: {
+    title: 'Provider rate limit',
+    detail: 'A provider rate limit was reached.',
+    action: 'This retries automatically.',
+  },
+};
+
+/** Failures where retrying would be wrong, not merely unlikely to help. */
+const RETRY_UNSAFE = new Set(['SUPPRESSED', 'DUPLICATE', 'NOT_QUALIFIED', 'NO_CONTACT_ROUTE', 'CAMPAIGN_ENDED']);
+
+export function describeFailure(code, { kind = null, retryable = null } = {}) {
+  if (!code) return null;
+  const guidance = FAILURE_GUIDANCE[code] || {};
+  const isRetryable = typeof retryable === 'boolean'
+    ? retryable
+    : (TRANSIENT.has(code) && !PERMANENT.has(code));
+  return {
+    code,
+    kind,
+    retryable: isRetryable,
+    retrySafe: !RETRY_UNSAFE.has(code),
+    title: guidance.title
+      || String(code).replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase()),
+    detail: guidance.detail
+      || userFacingMessage(new AppError(code, ''))
+      || `The step failed (${code}).`,
+    action: guidance.action || (isRetryable
+      ? 'This will be retried automatically.'
+      : 'Resolve the cause, then retry the job.'),
+  };
 }

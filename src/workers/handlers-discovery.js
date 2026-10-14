@@ -86,17 +86,38 @@ export async function discoveryHandler(ctx) {
 /** §12/§13 — investigate a lead: fetch its website, or record that it has none. */
 export async function researchHandler(ctx) {
   const { services, payload, job } = ctx;
-  const { leads, queue } = services;
+  const { leads, queue, evidence: audit } = services;
   const lead = await leads.get(payload.leadId);
   if (!lead) throw err.notFound('Lead');
+
+  // Open a fresh, immutable audit version for this evidence pass. Best-effort:
+  // a failure to open the audit never blocks the research itself.
+  let auditId = null;
+  if (audit) {
+    try {
+      const version = await audit.startAudit(job.user_id, lead.id, {
+        trigger: payload.trigger || 'research', method: 'research',
+      });
+      auditId = version?.id ?? null;
+    } catch { auditId = null; }
+  }
 
   const enqueueAnalysis = (extra = {}) => queue.enqueue({
     userId: job.user_id,
     missionId: lead.mission_id,
     stage: STAGE.SITE_ANALYSIS,
-    payload: { leadId: lead.id, ...extra },
-    idempotencyKey: `site_analysis:${lead.id}`,
+    payload: { leadId: lead.id, auditId, ...extra },
+    idempotencyKey: `analysis:${lead.id}:${auditId ?? 'na'}`,
   });
+
+  const record = (item) => {
+    if (!audit || !auditId) return Promise.resolve(null);
+    return audit.record({
+      auditId, leadId: lead.id, userId: job.user_id,
+      kind: item.kind, source: item.source ?? null, method: item.method ?? null,
+      url: item.url ?? null, payload: item.payload ?? null,
+    }).catch(() => null);
+  };
 
   // §13: a missing website must not disqualify a business.
   if (!lead.website_url) {
@@ -117,6 +138,12 @@ export async function researchHandler(ctx) {
       },
       score: null,
       method: 'discovery_metadata',
+    });
+    await record({
+      kind: 'research',
+      source: lead.discovery_source,
+      method: 'discovery_metadata_only',
+      payload: { hasWebsite: false, contactRoute: lead.contact_route },
     });
     await leads.setStatus(lead.id, 'investigated');
     await enqueueAnalysis();
@@ -143,6 +170,13 @@ export async function researchHandler(ctx) {
       fetchedMs: Date.now() - startedAt,
     });
     await leads.setStatus(lead.id, 'investigated', { error: failure?.message });
+    await record({
+      kind: 'verification',
+      source: lead.discovery_source,
+      method: 'website_fetch',
+      url: lead.website_url,
+      payload: { ok: false, error: failure?.message || 'fetch failed' },
+    });
     // The lead is still analysed so the AI can judge it from what we recorded.
     await enqueueAnalysis({ fetchFailed: true });
     throw failure || new Error('fetch failed');
@@ -159,6 +193,13 @@ export async function researchHandler(ctx) {
     fetchedMs: Date.now() - startedAt,
   });
   await leads.setStatus(lead.id, 'investigated');
+  await record({
+    kind: 'research',
+    source: lead.discovery_source,
+    method: evidence.analysisMethod,
+    url: page.url,
+    payload: { hasWebsite: true, bytes: page.bytes, httpStatus: page.status ?? null, heuristicScore: score },
+  });
   await ctx.heartbeat();
   await enqueueAnalysis();
 

@@ -85,6 +85,76 @@ test('prospect: drafting creates a reviewable draft message', async () => {
   });
 });
 
+test('prospect: drafting is idempotent so a double-click never duplicates a draft', async () => {
+  await withServer(async ({ system, base }) => {
+    const { c, lead } = await pipeline(system, base);
+
+    const first = await c.post(`/api/leads/${lead.id}/draft`, { requestId: 'req-1' });
+    const replay = await c.post(`/api/leads/${lead.id}/draft`, { requestId: 'req-1' });
+    assert.equal(first.status, 201);
+    assert.equal(replay.body.message.id, first.body.message.id);
+    assert.equal(replay.body.deduped, true);
+
+    // Without a request id, an in-flight draft of the same kind is returned.
+    const again = await c.post(`/api/leads/${lead.id}/draft`, {});
+    assert.equal(replay.body.deduped, true);
+    assert.equal(replay.body.message.id, first.body.message.id);
+
+    const detail = await c.get(`/api/leads/${lead.id}`);
+    assert.equal(detail.body.messages.filter((m) => m.send_status === 'draft').length, 1);
+  });
+});
+
+test('prospect: refreshing evidence is idempotent while a pass is in flight', async () => {
+  await withServer(async ({ system, base }) => {
+    const { c, lead } = await pipeline(system, base);
+
+    const first = await c.post(`/api/leads/${lead.id}/refresh`, {});
+    const second = await c.post(`/api/leads/${lead.id}/refresh`, {});
+    assert.equal(first.status, 202);
+    assert.equal(second.body.deduped, true);
+    assert.equal(second.body.job.id, first.body.job.id, 'a second refresh must reuse the in-flight job');
+  });
+});
+
+test('prospect: evidence is versioned per lead and owned by its user', async () => {
+  await withServer(async ({ system, base }) => {
+    const { c, lead } = await pipeline(system, base);
+
+    const res = await c.get(`/api/leads/${lead.id}/evidence`);
+    assert.equal(res.status, 200);
+    assert.ok(res.body.audits.length >= 1, 'at least one audit version must exist');
+    const latest = res.body.audits[0];
+    assert.equal(latest.version, 1);
+    assert.ok(latest.evidence.length >= 1, 'the audit must carry captured evidence');
+    assert.ok(latest.evidence.every((e) => e.lead_id === lead.id));
+    // Every evidence item is traceable to the audit version it came from.
+    assert.ok(latest.evidence.every((e) => e.audit_id === latest.id && e.hash));
+
+    const other = await signedIn(base, 'bob');
+    assert.equal((await other.get(`/api/leads/${lead.id}/evidence`)).status, 404);
+  });
+});
+
+test('prospect: a failed job surfaces an explained, retry-safe failure', async () => {
+  await withServer(async ({ system, base }) => {
+    const { c } = await pipeline(system, base);
+    const job = await system.queue.enqueue({ userId: 1, missionId: null, stage: 'research', payload: {} });
+    await system.queue.claim('w1');
+    await system.queue.fail(job.job.id, new Error('no credits'), {
+      kind: 'ai', retryable: false, code: 'AI_CREDITS_EXHAUSTED',
+    });
+
+    const activity = await c.get('/api/activity');
+    const row = activity.body.jobs.find((j) => j.id === job.job.id);
+    assert.equal(row.status, 'failed');
+    assert.equal(row.failure.code, 'AI_CREDITS_EXHAUSTED');
+    assert.equal(row.failure.retryable, false);
+    assert.equal(row.failure.retrySafe, true);
+    assert.match(row.failure.action, /credits|quota/i);
+  });
+});
+
 test('prospect: drafting without a connected mailbox is refused', async () => {
   await withServer(async ({ system, base }) => {
     const { c, lead } = await pipeline(system, base, { connect: false });

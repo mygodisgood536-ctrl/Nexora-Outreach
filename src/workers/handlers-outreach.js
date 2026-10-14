@@ -139,7 +139,7 @@ export async function emailHandler(ctx) {
     }
     return { messageId: message.id, sent: true, provider: result.provider, to };
   } catch (e) {
-    await conversations.markFailed(message.id, e.message);
+    await conversations.markFailed(message.id, e.message, e.code || null);
     if (e.code === 'MAILBOX_AUTH_EXPIRED') {
       await notifications.create(job.user_id, {
         kind: 'mailbox_expired', severity: 'critical',

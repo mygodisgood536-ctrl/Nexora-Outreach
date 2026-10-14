@@ -10,9 +10,11 @@ import { err } from '../core/errors.js';
 
 export async function siteAnalysisHandler(ctx) {
   const { services, payload, job, mission } = ctx;
-  const { leads, ai, queue } = services;
+  const { leads, ai, queue, evidence: audit } = services;
   const lead = await leads.get(payload.leadId);
   if (!lead) throw err.notFound('Lead');
+  // The audit version opened by the research pass this analysis belongs to.
+  const auditId = payload.auditId ?? null;
 
   const site = await leads.websiteAnalysis(lead.id);
   const presence = await leads.presenceAnalysis(lead.id);
@@ -40,6 +42,13 @@ export async function siteAnalysisHandler(ctx) {
       ok: true, url: site.url, evidence: site.evidence,
       findings: analysis.findings, score: analysis.quality_score, method: site.method,
     });
+    await recordEvidence(audit, auditId, lead, job, {
+      kind: 'website_finding',
+      source: lead.discovery_source,
+      method: site.method,
+      url: site.url,
+      payload: { evidence: site.evidence, findings: analysis.findings, qualityScore: analysis.quality_score, model: analysis.model },
+    });
   } else {
     // §13 — a business with no website is analysed from its public presence.
     analysis = await ai.analyzePresence(job.user_id, {
@@ -52,6 +61,19 @@ export async function siteAnalysisHandler(ctx) {
       findings: analysis.findings,
       score: analysis.opportunity_score,
       method: presence?.method || 'discovery_metadata',
+    });
+    await recordEvidence(audit, auditId, lead, job, {
+      kind: 'presence',
+      source: lead.discovery_source,
+      method: presence?.method || 'discovery_metadata',
+      url: lead.website_url || null,
+      payload: { evidence: presence?.evidence || {}, findings: analysis.findings, opportunityScore: analysis.opportunity_score, model: analysis.model },
+    });
+    await recordEvidence(audit, auditId, lead, job, {
+      kind: 'recommendation',
+      source: lead.discovery_source,
+      method: 'ai_recommendation',
+      payload: { findings: analysis.findings },
     });
   }
 
@@ -67,26 +89,50 @@ export async function siteAnalysisHandler(ctx) {
   }
 
   await leads.setStatus(lead.id, 'analyzed');
+  if (audit && auditId) {
+    await audit.finishAudit(auditId, {
+      status: 'succeeded',
+      method: site?.ok ? (site.method || 'website_analysis') : (presence?.method || 'discovery_metadata'),
+    });
+  }
   await ctx.heartbeat();
   await queue.enqueue({
     userId: job.user_id, missionId: lead.mission_id,
-    stage: STAGE.QUALIFICATION, payload: { leadId: lead.id },
+    stage: STAGE.QUALIFICATION, payload: { leadId: lead.id, auditId },
     idempotencyKey: `qualification:${lead.id}`,
   });
   return { leadId: lead.id, findings: analysis.findings.length, model: analysis.model };
 }
 
+/**
+ * Best-effort evidence append. Recorded evidence must never break the pipeline,
+ * so a missing service or audit is a no-op and write errors are swallowed after
+ * a log line — the audit trail is valuable but not load-bearing.
+ */
+async function recordEvidence(audit, auditId, lead, job, item) {
+  if (!audit || !auditId) return null;
+  try {
+    return await audit.record({
+      auditId, leadId: lead.id, userId: job.user_id,
+      kind: item.kind, source: item.source ?? null, method: item.method ?? null,
+      url: item.url ?? null, payload: item.payload ?? null,
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
 /** §14 — decide whether the prospect is relevant and has a real opportunity. */
 export async function qualificationHandler(ctx) {
   const { services, payload, job, mission } = ctx;
-  const { leads, ai, queue } = services;
+  const { leads, ai, queue, evidence: audit } = services;
   const lead = await leads.get(payload.leadId);
   if (!lead) throw err.notFound('Lead');
 
-  const evidence = await leads.evidenceFor(lead.id);
+  const bundle = await leads.evidenceFor(lead.id);
   const result = await ai.qualifyLead(job.user_id, {
-    lead: evidence.lead,
-    analysis: { website: evidence.website, presence: evidence.presence },
+    lead: bundle.lead,
+    analysis: { website: bundle.website, presence: bundle.presence },
     mission: {
       offer_summary: mission.offer_summary,
       target_description: mission.target_description,
@@ -104,6 +150,19 @@ export async function qualificationHandler(ctx) {
     relevantService: result.relevant_service,
     explanation: result.explanation,
     model: result.model,
+  });
+  await recordEvidence(audit, payload.auditId, lead, job, {
+    kind: 'qualification',
+    source: lead.discovery_source,
+    method: 'ai_qualification',
+    payload: {
+      qualified: result.qualified,
+      confidence: result.confidence,
+      reason: result.reason,
+      observed: result.observed,
+      opportunity: result.opportunity,
+      model: result.model,
+    },
   });
 
   if (!result.qualified) {

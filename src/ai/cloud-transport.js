@@ -41,6 +41,22 @@ export function familyOf(modelDef = {}) {
   return 'openai';
 }
 
+/**
+ * True when a provider response means the workspace is out of credits/quota.
+ * Mapped to the permanent `AI_CREDITS_EXHAUSTED` code so the retry loop stops
+ * and the UI can tell the operator to top up (spec §30).
+ */
+export function isCreditsExhausted(status, bodyText) {
+  if (Number(status) === 402) return true;
+  const t = String(bodyText || '').toLowerCase();
+  return t.includes('insufficient_quota')
+    || t.includes('insufficient quota')
+    || t.includes('quota exceeded')
+    || t.includes('credit balance')
+    || t.includes('out of credits')
+    || t.includes('billing');
+}
+
 function normaliseTokens(usage) {
   if (!usage || typeof usage !== 'object') return null;
   const prompt = usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount ?? null;
@@ -127,6 +143,10 @@ export class OpenCodeCloudTransport {
         throw err.ai('AI_MODEL_UNAVAILABLE',
           'OpenCode Cloud denied access to this model or operation (it may be disabled for this workspace).',
           detail);
+      }
+      if (isCreditsExhausted(res.status, text)) {
+        throw err.ai('AI_CREDITS_EXHAUSTED',
+          'OpenCode Cloud reported that this workspace has no credits or quota left.', detail);
       }
       if (res.status === 429) {
         throw err.ai('AI_PROVIDER_ERROR', 'OpenCode Cloud rate-limited the request (HTTP 429).', detail);
@@ -295,6 +315,10 @@ export class OpenCodeCloudTransport {
         throw err.ai('AI_MODEL_UNAVAILABLE',
           'OpenCode Cloud denied access to this model (it may be disabled for this workspace).',
           detail);
+      }
+      if (isCreditsExhausted(res.status, text)) {
+        throw err.ai('AI_CREDITS_EXHAUSTED',
+          'OpenCode Cloud reported that this workspace has no credits or quota left.', detail);
       }
       if (res.status === 429) {
         throw err.ai('AI_PROVIDER_ERROR', 'OpenCode Cloud rate-limited the request (HTTP 429).', detail);

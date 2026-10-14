@@ -419,11 +419,24 @@ async function renderMissionDetail(id) {
       <div class="section-head"><h2>Activity</h2></div>
       ${(activity.jobs || []).length ? `<div class="table-wrap"><table class="table">
         <thead><tr><th>Stage</th><th>Status</th><th>When</th><th>Detail</th><th></th></tr></thead><tbody>
-        ${activity.jobs.slice(0, 25).map((j) => `<tr><td class="mono small">${esc(j.stage || j.kind || '')}</td>
+        ${activity.jobs.slice(0, 25).map((j) => {
+          const fail = j.failure;
+          const canRetry = j.status === 'failed' || j.status === 'waiting_retry';
+          const retrySafe = !fail || fail.retrySafe !== false;
+          const detail = fail
+            ? `<b>${esc(fail.title || '')}</b><br><span class="muted">${esc(fail.detail || '')}</span><br><span class="faint">${esc(fail.action || '')}</span>`
+            : esc((j.last_error || '').slice(0, 120));
+          const action = canRetry
+            ? (retrySafe
+              ? `<button class="btn small" data-act="retry-job" data-id="${j.id}">Retry</button>`
+              : '<span class="faint small">not retryable</span>')
+            : '';
+          return `<tr><td class="mono small">${esc(j.stage || j.kind || '')}</td>
           <td>${badge(j.status)}${j.error_kind ? ` <span class="faint small">${esc(j.error_kind)}</span>` : ''}</td>
           <td class="small muted">${fmtRel(j.finished_at || j.created_at || j.enqueued_at)}</td>
-          <td class="small faint">${esc((j.last_error || '').slice(0, 120))}</td>
-          <td>${j.status === 'failed' || j.status === 'waiting_retry' ? `<button class="btn small" data-act="retry-job" data-id="${j.id}">Retry</button>` : ''}</td></tr>`).join('')}
+          <td class="small faint">${detail}</td>
+          <td>${action}</td></tr>`;
+        }).join('')}
         </tbody></table></div>` : '<div class="faint small">No job activity yet.</div>'}
     </div>`);
 }
@@ -621,7 +634,7 @@ async function renderLeadDetail(id) {
         ${l.phonePublic ? `<a class="btn small" href="tel:${esc(l.phonePublic)}">${esc(l.phonePublic)}</a>` : ''}
       </div>
       ${suppression.suppressed ? `<div class="badge red" style="margin-top:12px">Suppressed · ${esc(suppression.scope || '')} · ${esc(suppression.reason || '')}</div>` : ''}
-      ${lead.stageError ? `<div class="badge red" style="margin-top:12px">Last error: ${esc(String(lead.stageError).slice(0, 200))}</div>` : ''}
+      ${l.stageError ? `<div class="badge red" style="margin-top:12px">Last error: ${esc(String(l.stageError).slice(0, 200))}</div>` : ''}
     </div>
 
     <div class="grid cols-2" style="margin-bottom:16px">
@@ -673,13 +686,42 @@ async function renderLeadDetail(id) {
           ${msg.send_status === 'draft' || msg.send_status === 'awaiting_approval' ? `<div class="row" style="gap:8px;margin-top:10px">
             <button class="btn small" data-act="approve" data-id="${msg.id}">Approve & send</button>
             <button class="btn small" data-act="reject" data-id="${msg.id}">Reject</button></div>` : ''}
+          ${msg.failure ? `<div class="badge red" style="margin-top:10px">${esc(msg.failure.title || 'Failed')} · ${esc(msg.failure.detail || '')}</div>` : ''}
         </div>`).join('') : '<div class="faint small">No messages yet.</div>'}
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
+      <div class="section-head"><h2>Evidence history</h2></div>
+      ${auditHistory(data.latestAudit)}
     </div>
 
     <div class="panel">
       <div class="section-head"><h2>Presence & evidence</h2></div>
       ${data.presenceAnalysis ? `<div class="small muted" style="white-space:pre-wrap">${esc(JSON.stringify(data.presenceAnalysis, null, 2).slice(0, 1200))}</div>` : '<div class="faint small">No presence signals recorded.</div>'}
     </div>`);
+}
+
+/** Renders the latest versioned audit and its captured evidence (spec §12/§30). */
+function auditHistory(audit) {
+  if (!audit) return '<div class="faint small">No evidence collected yet.</div>';
+  const items = Array.isArray(audit.evidence) ? audit.evidence : [];
+  const kindLabel = (k) => titleCase(String(k || '').replace(/_/g, ' '));
+  return `<div class="row" style="gap:18px;margin-bottom:10px">
+      <div><div class="card-label">Version</div><div class="mono" style="font-size:22px">v${esc(audit.version)}</div></div>
+      <div><div class="card-label">Status</div><div class="mono" style="font-size:22px">${esc(audit.status || '—')}</div></div>
+      <div><div class="card-label">Trigger</div><div class="mono" style="font-size:22px">${esc(audit.trigger || '—')}</div></div>
+      <div><div class="card-label">When</div><div class="small muted" style="padding-top:8px">${fmtRel(audit.finished_at || audit.started_at || audit.created_at)}</div></div>
+    </div>
+    ${audit.error ? `<div class="badge red" style="margin-bottom:8px">${esc(String(audit.error).slice(0, 200))}</div>` : ''}
+    ${items.length ? `<div class="table-wrap"><table class="table">
+      <thead><tr><th>Evidence</th><th>Source</th><th>Recorded</th></tr></thead><tbody>
+      ${items.map((e) => `<tr>
+        <td><b class="small">${esc(kindLabel(e.kind))}</b>${e.url ? ` <a class="small faint" href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ''}
+          <div class="faint small mono" style="max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(JSON.stringify(e.payload))}</div></td>
+        <td class="small faint">${esc(e.method || e.source || '—')}</td>
+        <td class="small muted">${fmtRel(e.created_at)}</td>
+      </tr>`).join('')}
+    </tbody></table></div>` : '<div class="faint small">No evidence items recorded for this version.</div>'}`;
 }
 
 /** Renders an analysis `findings` value, which may be an array or a summary object. */

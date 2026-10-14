@@ -137,7 +137,7 @@ export class JobQueue {
     await this.db.run(
       `UPDATE automation_jobs
           SET status='succeeded', result=?, finished_at=datetime('now'),
-              lease_until=NULL, updated_at=datetime('now')
+              lease_until=NULL, error_code=NULL, updated_at=datetime('now')
         WHERE id=?`,
       result === null ? null : JSON.stringify(result), jobId,
     );
@@ -148,10 +148,13 @@ export class JobQueue {
    * Record a failure. Transient failures are rescheduled with bounded backoff;
    * permanent failures stop immediately rather than retrying forever.
    */
-  async fail(jobId, error, { kind = 'system', retryable = false, maxAttempts = null } = {}) {
+  async fail(jobId, error, { kind = 'system', retryable = false, maxAttempts = null, code = null } = {}) {
     const job = await this.db.get('SELECT * FROM automation_jobs WHERE id = ?', jobId);
     if (!job) return null;
     const message = String(error?.message || error || 'Unknown error').slice(0, 2000);
+    // The stable machine code drives the failure UI; fall back to the error's
+    // own code when the caller did not pass one explicitly.
+    const errorCode = code ?? error?.code ?? null;
     const limit = maxAttempts ?? job.max_attempts;
     const canRetry = retryable && job.attempts < limit;
 
@@ -159,10 +162,10 @@ export class JobQueue {
       const at = sqliteUtc(new Date(Date.now() + backoffMs(job.attempts)));
       await this.db.run(
         `UPDATE automation_jobs
-            SET status='waiting_retry', last_error=?, error_kind=?, run_after=?,
+            SET status='waiting_retry', last_error=?, error_kind=?, error_code=?, run_after=?,
                 lease_until=NULL, updated_at=datetime('now')
           WHERE id=?`,
-        message, kind, at, jobId,
+        message, kind, errorCode, at, jobId,
       );
       await this._history(jobId, 'retry', `attempt ${job.attempts}/${limit}: ${message}`);
       return { retried: true, runAfter: at };
@@ -170,13 +173,13 @@ export class JobQueue {
 
     await this.db.run(
       `UPDATE automation_jobs
-          SET status='failed', last_error=?, error_kind=?, finished_at=datetime('now'),
+          SET status='failed', last_error=?, error_kind=?, error_code=?, finished_at=datetime('now'),
               lease_until=NULL, updated_at=datetime('now')
         WHERE id=?`,
-      message, kind, jobId,
+      message, kind, errorCode, jobId,
     );
     await this._history(jobId, 'failed', message);
-    log.warn(`job ${jobId} failed permanently`, { stage: job.stage, kind, message });
+    log.warn(`job ${jobId} failed permanently`, { stage: job.stage, kind, code: errorCode, message });
     return { retried: false };
   }
 
@@ -193,7 +196,7 @@ export class JobQueue {
     }
     await this.db.run(
       `UPDATE automation_jobs
-          SET status='queued', attempts=0, run_after=?, last_error=NULL, error_kind=NULL,
+          SET status='queued', attempts=0, run_after=?, last_error=NULL, error_kind=NULL, error_code=NULL,
               worker_id=NULL, lease_until=NULL, finished_at=NULL, updated_at=datetime('now')
         WHERE id=?`,
       nowSqlite(), jobId,
@@ -318,6 +321,28 @@ export class JobQueue {
 
   async history(jobId) {
     return this.db.all('SELECT * FROM job_history WHERE job_id=? ORDER BY id ASC', jobId);
+  }
+
+  /**
+   * The most recent job of a stage that is still active (queued, running or
+   * awaiting a retry). Used to make user actions idempotent: a double-click on
+   * "Refresh evidence" or "Run now" returns the job already in flight instead
+   * of enqueuing a duplicate (spec §23/§30).
+   *
+   * `leadId` matches the job `payload` (which is JSON: `{"leadId":7}`), scoped
+   * to the exact id so `7` never matches `17`.
+   */
+  async findActive({ userId = null, missionId = null, stage = null, leadId = null } = {}) {
+    const clauses = ["status IN ('queued','running','waiting_retry')"];
+    const params = [];
+    if (userId != null) { clauses.push('user_id = ?'); params.push(userId); }
+    if (missionId != null) { clauses.push('mission_id = ?'); params.push(missionId); }
+    if (stage) { clauses.push('stage = ?'); params.push(stage); }
+    if (leadId != null) { clauses.push('payload LIKE ?'); params.push(`%"leadId":${Number(leadId)}%`); }
+    return this.db.get(
+      `SELECT * FROM automation_jobs WHERE ${clauses.join(' AND ')} ORDER BY id DESC LIMIT 1`,
+      ...params,
+    );
   }
 
   /**

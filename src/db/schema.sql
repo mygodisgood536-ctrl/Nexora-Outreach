@@ -261,6 +261,7 @@ CREATE TABLE IF NOT EXISTS outreach_messages (
   provider_message_id TEXT,
   idempotency_key    TEXT UNIQUE,             -- prevents duplicate send (Â§30)
   error              TEXT,
+  error_code         TEXT,                    -- stable machine code for the failure UI (Â§30)
   sent_at            TEXT,
   opened_at          TEXT,
   created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -321,7 +322,8 @@ CREATE TABLE IF NOT EXISTS automation_jobs (
   idempotency_key TEXT UNIQUE,
   result          TEXT,
   last_error      TEXT,
-  error_kind      TEXT,       -- browser|ai|email|qualification|discovery|system (Â§30)
+  error_kind      TEXT,       -- browser|ai|email|qualification|discovery|system (§30)
+  error_code      TEXT,       -- stable machine code so the UI can explain the failure (§30)
   started_at      TEXT,
   finished_at     TEXT,
   created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -379,6 +381,45 @@ CREATE TABLE IF NOT EXISTS audit_events (
   at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_events(user_id, at);
+
+-- â”€â”€ Versioned evidence (spec Â§12/Â§13/Â§21/Â§30) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- One `audits` row per evidence-collection pass over a lead, so every claim
+-- can be traced back to the exact version it was drawn from. The current
+-- projections (website_analyses / presence_analyses / qualifications) are
+-- overwritten on each pass; these tables keep the immutable history.
+CREATE TABLE IF NOT EXISTS audits (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  lead_id     INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  version     INTEGER NOT NULL,               -- 1, 2, 3 … per lead
+  status      TEXT    NOT NULL DEFAULT 'running', -- running|succeeded|failed
+  trigger     TEXT,                           -- research|manual|scheduled|…
+  method      TEXT,                           -- how the primary evidence was gathered
+  error       TEXT,
+  started_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(lead_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id, version);
+
+-- Individual evidence items. `payload` is the exact JSON recorded at the time;
+-- `hash` is its SHA-256 digest so tampering is detectable.
+CREATE TABLE IF NOT EXISTS audit_evidence (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  audit_id   INTEGER NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+  lead_id    INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT    NOT NULL,      -- research|website_finding|presence|recommendation|verification|qualification
+  source     TEXT,
+  method     TEXT,
+  url        TEXT,
+  payload    TEXT,
+  hash       TEXT,
+  created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_evidence_audit ON audit_evidence(audit_id, kind);
+CREATE INDEX IF NOT EXISTS idx_audit_evidence_lead ON audit_evidence(lead_id, created_at);
 
 -- â”€â”€ Sent-volume guard (deliverability, spec Â§17) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 CREATE TABLE IF NOT EXISTS send_log (

@@ -20,7 +20,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const txStore = new AsyncLocalStorage();
 
 /** Bumped whenever schema.sql / schema.postgres.sql change. */
-export const SCHEMA_VERSION = '5';
+export const SCHEMA_VERSION = '6';
 
 /** Arbitrary but stable advisory-lock key guarding schema application. */
 const SCHEMA_LOCK_ID = 728_190_431;
@@ -41,6 +41,10 @@ const POSTGRES_UPGRADES = [
   'ALTER TABLE missions ADD COLUMN IF NOT EXISTS min_seconds_between_sends INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE missions ADD COLUMN IF NOT EXISTS campaign_start_at TEXT',
   'ALTER TABLE missions ADD COLUMN IF NOT EXISTS campaign_end_at TEXT',
+  // §30 failure UI: stable machine-readable error codes alongside the human
+  // message, so the operator can be told what failed and whether retry is safe.
+  'ALTER TABLE automation_jobs ADD COLUMN IF NOT EXISTS error_code TEXT',
+  'ALTER TABLE outreach_messages ADD COLUMN IF NOT EXISTS error_code TEXT',
 ];
 
 /**
@@ -50,10 +54,12 @@ const POSTGRES_UPGRADES = [
  * no `ADD COLUMN IF NOT EXISTS`.
  */
 const SQLITE_UPGRADES = [
-  { column: 'hourly_send_limit', sql: 'ALTER TABLE missions ADD COLUMN hourly_send_limit INTEGER NOT NULL DEFAULT 0' },
-  { column: 'min_seconds_between_sends', sql: 'ALTER TABLE missions ADD COLUMN min_seconds_between_sends INTEGER NOT NULL DEFAULT 0' },
-  { column: 'campaign_start_at', sql: 'ALTER TABLE missions ADD COLUMN campaign_start_at TEXT' },
-  { column: 'campaign_end_at', sql: 'ALTER TABLE missions ADD COLUMN campaign_end_at TEXT' },
+  { table: 'missions', column: 'hourly_send_limit', sql: 'ALTER TABLE missions ADD COLUMN hourly_send_limit INTEGER NOT NULL DEFAULT 0' },
+  { table: 'missions', column: 'min_seconds_between_sends', sql: 'ALTER TABLE missions ADD COLUMN min_seconds_between_sends INTEGER NOT NULL DEFAULT 0' },
+  { table: 'missions', column: 'campaign_start_at', sql: 'ALTER TABLE missions ADD COLUMN campaign_start_at TEXT' },
+  { table: 'missions', column: 'campaign_end_at', sql: 'ALTER TABLE missions ADD COLUMN campaign_end_at TEXT' },
+  { table: 'automation_jobs', column: 'error_code', sql: 'ALTER TABLE automation_jobs ADD COLUMN error_code TEXT' },
+  { table: 'outreach_messages', column: 'error_code', sql: 'ALTER TABLE outreach_messages ADD COLUMN error_code TEXT' },
 ];
 
 export class Db {
@@ -160,15 +166,26 @@ export class Db {
       // pre-existing database that is behind the current version; a fresh
       // database already received the columns from schema.sql. Guard on the
       // actual columns so a partially-applied upgrade cannot crash the boot.
-      if (metaExists) {
-        const cols = new Set((await this.all('PRAGMA table_info(missions)')).map((c) => c.name));
-        for (const { column, sql } of SQLITE_UPGRADES) {
-          if (!cols.has(column)) await this.exec(sql);
-        }
-      }
+      if (metaExists) await this._applySqliteUpgrades();
       await this._writeSchemaVersion();
     }
     return true;
+  }
+
+  /** Apply the SQLite additive upgrades for tables that already exist. */
+  async _applySqliteUpgrades() {
+    const columnsByTable = new Map();
+    for (const upgrade of SQLITE_UPGRADES) {
+      // A table that never existed is created fresh (with the column) by the
+      // base DDL, so there is nothing to add.
+      if (!columnsByTable.has(upgrade.table)) {
+        if (!(await this.hasTable(upgrade.table))) { columnsByTable.set(upgrade.table, null); continue; }
+        const info = await this.all(`PRAGMA table_info(${upgrade.table})`);
+        columnsByTable.set(upgrade.table, new Set(info.map((c) => c.name)));
+      }
+      const cols = columnsByTable.get(upgrade.table);
+      if (cols && !cols.has(upgrade.column)) await this.run(upgrade.sql);
+    }
   }
 
   async close() {

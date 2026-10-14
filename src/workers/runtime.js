@@ -95,7 +95,9 @@ export class WorkerRuntime {
       ? error.retryable
       : (error instanceof AppError ? error.retryable : true);
 
-    const result = await this.queue.fail(ctx.job.id, error, { kind, retryable });
+    const result = await this.queue.fail(ctx.job.id, error, {
+      kind, retryable, code: error?.code || null,
+    });
     log.warn(`job ${ctx.job.id} (${ctx.job.stage}) failed`, { kind, retryable, message: error?.message });
 
     const notify = ctx.services?.notifications;

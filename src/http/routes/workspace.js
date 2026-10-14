@@ -1,7 +1,20 @@
-import { err } from '../../core/errors.js';
+import { err, describeFailure } from '../../core/errors.js';
 import { requireUser } from '../middleware.js';
 import { STAGE } from '../../workers/queue.js';
 import { enforceRateLimit } from '../../services/rate-limit.js';
+
+/**
+ * Attach the operator-facing failure explanation (spec §30) to a job row. A job
+ * with no failure is passed through untouched, so callers can use this on every
+ * list without special-casing success.
+ */
+function withFailure(job) {
+  if (!job || !job.error_code) return job;
+  return {
+    ...job,
+    failure: describeFailure(job.error_code, { kind: job.error_kind, retryable: null }),
+  };
+}
 
 /**
  * Mission, lead, conversation, notification, activity and suppression routes.
@@ -144,6 +157,13 @@ export function registerWorkspaceRoutes(router, system) {
     const mission = await missions.getForUser(id, user.id);
     const locations = await missions.locations(id);
     if (!locations.length) throw err.validation('Add a target location before running.');
+    // Idempotent: one run in flight per mission. A second click while a pass is
+    // queued/running returns that job instead of stacking duplicate passes.
+    const active = await queue.findActive({ userId: user.id, missionId: id, stage: STAGE.DISCOVERY });
+    if (active) {
+      ctx.json(202, { enqueued: 0, deduped: true, jobId: active.id });
+      return;
+    }
     let enqueued = 0;
     for (const location of locations) {
       const { created } = await queue.enqueue({
@@ -160,7 +180,8 @@ export function registerWorkspaceRoutes(router, system) {
     const user = requireUser(ctx);
     const id = toId(ctx.params.id);
     await missions.getForUser(id, user.id);
-    ctx.json(200, { jobs: await queue.recent({ userId: user.id, missionId: id, limit: 50 }) });
+    const jobs = await queue.recent({ userId: user.id, missionId: id, limit: 50 });
+    ctx.json(200, { jobs: jobs.map(withFailure) });
   });
 
   // ── Leads (spec §14, §21) ───────────────────────────────────────
@@ -185,18 +206,33 @@ export function registerWorkspaceRoutes(router, system) {
     const user = requireUser(ctx);
     const lead = await leads.getForUser(toId(ctx.params.id), user.id);
     const conversation = (await conversations.getFor(lead.id, lead.mission_id)) || null;
+    const messages = conversation ? await conversations.messagesFor(conversation.id) : [];
     ctx.json(200, {
       lead: leads.toPublic(lead),
       websiteAnalysis: await leads.websiteAnalysis(lead.id),
       presenceAnalysis: await leads.presenceAnalysis(lead.id),
       qualification: await leads.qualification(lead.id),
+      // The latest immutable audit version and its captured evidence, so the
+      // prospect view can show exactly what was observed and when (spec §12/§30).
+      latestAudit: await system.evidence.latestForLead(lead.id),
       conversation,
       // Section 21 requires the whole prospect view on one screen: the message
       // history, where the follow-up schedule stands, and whether this recipient
       // is still contactable.
-      messages: conversation ? await conversations.messagesFor(conversation.id) : [],
+      messages: messages.map((m) => (m.error_code ? { ...m, failure: describeFailure(m.error_code) } : m)),
       followUps: conversation ? await conversations.followUpsFor(conversation.id) : [],
       suppression: await conversations.suppressionStatusFor(user.id, lead, conversation?.id ?? null),
+    });
+  });
+
+  /** §12/§21 — full versioned evidence history for one prospect. */
+  router.get('/api/leads/:id/evidence', async (ctx) => {
+    const user = requireUser(ctx);
+    const lead = await leads.getForUser(toId(ctx.params.id), user.id);
+    ctx.json(200, {
+      lead: leads.toPublic(lead),
+      audits: await system.evidence.auditsFor(lead.id),
+      latest: await system.evidence.latestForLead(lead.id),
     });
   });
 
@@ -217,6 +253,7 @@ export function registerWorkspaceRoutes(router, system) {
     const result = await system.prospect.draft(user.id, toId(ctx.params.id), {
       followUpNumber: body.followUpNumber,
       senderName: user.fullName,
+      requestId: body.requestId ?? null,
     });
     ctx.json(201, result);
   });
@@ -327,8 +364,9 @@ export function registerWorkspaceRoutes(router, system) {
   // ── Activity (spec §36) ───────────────────────────────────────
   router.get('/api/activity', async (ctx) => {
     const user = requireUser(ctx);
+    const jobs = await queue.recent({ userId: user.id, limit: Math.min(Number(ctx.query.limit) || 50, 200) });
     ctx.json(200, {
-      jobs: await queue.recent({ userId: user.id, limit: Math.min(Number(ctx.query.limit) || 50, 200) }),
+      jobs: jobs.map(withFailure),
       stats: await queue.stats({ userId: user.id }),
       audit: await db.all(
         'SELECT * FROM audit_events WHERE user_id = ? ORDER BY id DESC LIMIT 50', user.id
@@ -343,7 +381,7 @@ export function registerWorkspaceRoutes(router, system) {
     const job = await db.get('SELECT * FROM automation_jobs WHERE id = ?', id);
     // Ownership is proven before the job is touched.
     if (!job || job.user_id !== user.id) throw err.notFound('Job');
-    ctx.json(200, { job: await queue.retry(id) });
+    ctx.json(200, { job: withFailure(await queue.retry(id)) });
   });
 
   // ── Suppression (spec §17, §29) ──────────────────────────────

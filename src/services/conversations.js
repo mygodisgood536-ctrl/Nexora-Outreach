@@ -207,16 +207,25 @@ export class ConversationService {
   }
 
   async createMessage({ conversationId, leadId, missionId, kind = 'initial', subject, bodyText, model = null, idempotencyKey }) {
-    const existing = await this.db.get('SELECT * FROM outreach_messages WHERE idempotency_key = ?', idempotencyKey);
-    if (existing) return { message: existing, created: false };
+    // Atomic idempotency: the UNIQUE(idempotency_key) constraint decides the
+    // winner, so two concurrent attempts (double-clicked send, overlapping cron
+    // and manual run) can never both insert. The loser reads the existing row
+    // back instead of erroring, making the whole operation safe to retry.
     const result = await this.db.run(
       `INSERT INTO outreach_messages(conversation_id, lead_id, mission_id, kind, subject,
                                      body_text, model, send_status, idempotency_key)
-       VALUES(?,?,?,?,?,?,?, 'draft', ?) RETURNING id`,
+       VALUES(?,?,?,?,?,?,?, 'draft', ?)
+       ON CONFLICT(idempotency_key) DO NOTHING
+       RETURNING id`,
       conversationId, leadId, missionId, kind, subject, bodyText, model, idempotencyKey
     );
-    const id = result.lastInsertRowid;
-    return { message: await this.message(id), created: true };
+    // `changes` (not lastInsertRowid) is the reliable signal: on a conflict the
+    // INSERT touches no row, while lastInsertRowid can still report the
+    // connection's previous insert.
+    const id = result.changes ? result.lastInsertRowid : 0;
+    if (id) return { message: await this.message(id), created: true };
+    const existing = await this.db.get('SELECT * FROM outreach_messages WHERE idempotency_key = ?', idempotencyKey);
+    return { message: existing, created: false };
   }
 
   async message(id) { return this.db.get('SELECT * FROM outreach_messages WHERE id = ?', id); }
@@ -287,17 +296,17 @@ export class ConversationService {
     await this.db.run(
       `UPDATE outreach_messages
           SET send_status = 'sent', provider = ?, provider_message_id = ?, sent_at = datetime('now'),
-              idempotency_key = COALESCE(?, idempotency_key), error = NULL
+              idempotency_key = COALESCE(?, idempotency_key), error = NULL, error_code = NULL
         WHERE id = ?`,
       provider, providerMessageId, idempotencyKey, messageId
     );
     return this.message(messageId);
   }
 
-  async markFailed(messageId, error) {
+  async markFailed(messageId, error, code = null) {
     await this.db.run(
-      "UPDATE outreach_messages SET send_status = 'failed', error = ? WHERE id = ?",
-      String(error).slice(0, 1000), messageId
+      "UPDATE outreach_messages SET send_status = 'failed', error = ?, error_code = ? WHERE id = ?",
+      error, code, messageId,
     );
     return this.message(messageId);
   }

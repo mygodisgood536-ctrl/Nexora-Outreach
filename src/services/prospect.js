@@ -44,7 +44,7 @@ export class ProspectService {
    * through the same review/approve path as pipeline-generated outreach and is
    * never sent without approval.
    */
-  async draft(userId, leadId, { followUpNumber = 0, senderName = null } = {}) {
+  async draft(userId, leadId, { followUpNumber = 0, senderName = null, requestId = null } = {}) {
     const lead = await this.leads.getForUser(leadId, userId);
     const connection = await this.emailStore.activeFor(userId);
     if (!connection) {
@@ -52,6 +52,25 @@ export class ProspectService {
     }
     const mission = await this.db.get('SELECT * FROM missions WHERE id = ?', lead.mission_id);
     if (!mission) throw err.notFound('Mission');
+
+    const kind = Number(followUpNumber) > 0 ? 'follow_up' : 'initial';
+    // Idempotency: a request id makes the operation replay-safe (the same
+    // request never drafts twice); without one, an in-flight draft of the same
+    // kind is returned instead of creating a duplicate for a double-click.
+    const idempotencyKey = requestId
+      ? `manual:${mission.id}:${lead.id}:${kind}:${String(requestId).slice(0, 120)}`
+      : null;
+    if (!idempotencyKey) {
+      const existing = await this.db.get(
+        `SELECT * FROM outreach_messages
+          WHERE lead_id = ? AND mission_id = ? AND kind = ? AND send_status = 'draft'
+          ORDER BY id DESC LIMIT 1`,
+        lead.id, mission.id, kind,
+      );
+      if (existing) {
+        return { message: existing, lead: this.leads.toPublic(lead), referenced: [], deduped: true };
+      }
+    }
 
     const evidence = await this.leads.evidenceFor(lead.id);
     const draft = await this.ai.writeOutreach(userId, {
@@ -69,8 +88,7 @@ export class ProspectService {
     });
 
     const conversation = await this.conversations.ensure(lead.id, mission.id, userId);
-    const kind = Number(followUpNumber) > 0 ? 'follow_up' : 'initial';
-    const { message } = await this.conversations.createMessage({
+    const { message, created } = await this.conversations.createMessage({
       conversationId: conversation.id,
       leadId: lead.id,
       missionId: mission.id,
@@ -78,24 +96,32 @@ export class ProspectService {
       subject: draft.subject,
       bodyText: draft.body,
       model: draft.model,
-      // A manual draft is always a fresh artefact, so the key is unique per
-      // request rather than derived from the lead.
-      idempotencyKey: `manual:${mission.id}:${lead.id}:${kind}:${Date.now()}`,
+      idempotencyKey: idempotencyKey || `manual:${mission.id}:${lead.id}:${kind}:${Date.now()}`,
     });
-    return { message, lead: this.leads.toPublic(lead), referenced: draft.referenced_observations || [] };
+    return {
+      message, lead: this.leads.toPublic(lead),
+      referenced: draft.referenced_observations || [],
+      deduped: !created,
+    };
   }
 
   /** §12/§13 — collect fresh evidence for one prospect again. */
   async refresh(userId, leadId) {
     const lead = await this.leads.getForUser(leadId, userId);
+    // Idempotent: if a research pass for this lead is already in flight, return
+    // it rather than stacking a second run (a double-clicked "Refresh").
+    const active = await this.queue.findActive({ userId, stage: 'research', leadId: lead.id });
+    if (active) {
+      return { job: active, created: false, deduped: true, lead: this.leads.toPublic(lead) };
+    }
     const { job, created } = await this.queue.enqueue({
       userId,
       missionId: lead.mission_id,
       stage: 'research',
-      payload: { leadId: lead.id },
+      payload: { leadId: lead.id, trigger: 'manual' },
       idempotencyKey: `research:manual:${lead.id}:${Date.now()}`,
     });
-    return { job, created, lead: this.leads.toPublic(lead) };
+    return { job, created, deduped: false, lead: this.leads.toPublic(lead) };
   }
 }
 

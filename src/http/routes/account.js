@@ -24,6 +24,7 @@ export function registerAccountRoutes(router, system) {
     ctx.json(200, {
       ok: true,
       service: 'nexora-outreach',
+      commit: process.env.VERCEL_GIT_COMMIT_SHA ? process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7) : null,
       time: new Date().toISOString(),
       automation: {
         cronConfigured: Boolean(config.cron.secret),

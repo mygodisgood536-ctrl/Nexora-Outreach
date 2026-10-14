@@ -14,6 +14,17 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('http');
 
+// On Vercel a fire-and-forget promise can be frozen once the response is sent,
+// so the opportunistic automation tick might never finish. `waitUntil` keeps
+// the function alive for that background work. It is guarded because it only
+// exists inside a Vercel request context (tests run without it).
+let waitUntil = null;
+try {
+  ({ waitUntil } = await import('@vercel/functions'));
+} catch {
+  waitUntil = null;
+}
+
 /**
  * Builds the HTTP server around an existing system.
  *
@@ -49,9 +60,13 @@ export function createHandler(system) {
       && pathname.startsWith('/api/')
       && pathname !== '/api/cron/tick'
       && pathname !== '/api/health') {
-      Promise.resolve()
+      const tick = Promise.resolve()
         .then(() => system.opportunisticTick())
         .catch((e) => log.warn(`opportunistic automation tick failed: ${e?.message}`));
+      // Keep the serverless function alive until the tick settles.
+      if (waitUntil) {
+        try { waitUntil(tick); } catch { /* not in a Vercel request context */ }
+      }
     }
 
     const cookies = parseCookies(req.headers.cookie);

@@ -148,6 +148,7 @@ export async function qualificationHandler(ctx) {
     observed: result.observed,
     opportunity: result.opportunity,
     relevantService: result.relevant_service,
+    recommendedService: result.recommended_service,
     explanation: result.explanation,
     model: result.model,
   });
@@ -161,9 +162,20 @@ export async function qualificationHandler(ctx) {
       reason: result.reason,
       observed: result.observed,
       opportunity: result.opportunity,
+      recommended_service: result.recommended_service,
       model: result.model,
     },
   });
+  // §16: also record the structured recommendation as its own evidence kind so
+  // the redesign decision is auditable independently of the qualification text.
+  if (result.recommended_service) {
+    await recordEvidence(audit, payload.auditId, lead, job, {
+      kind: 'recommendation',
+      source: lead.discovery_source,
+      method: 'controlled_recommendation',
+      payload: { recommended_service: result.recommended_service },
+    });
+  }
 
   if (!result.qualified) {
     // §14: do not contact every discovered business.

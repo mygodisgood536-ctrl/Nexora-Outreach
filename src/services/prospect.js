@@ -9,13 +9,15 @@ import { err } from '../core/errors.js';
  * ownership through LeadService before touching any record.
  */
 export class ProspectService {
-  constructor({ db, leads, conversations, ai, emailStore, queue }) {
+  constructor({ db, leads, conversations, ai, emailStore, queue, evidence, messageQuality = null }) {
     this.db = db;
     this.leads = leads;
     this.conversations = conversations;
     this.ai = ai;
     this.emailStore = emailStore;
     this.queue = queue;
+    this.evidence = evidence;
+    this.messageQuality = messageQuality;
   }
 
   /** §21 — answer a question about one prospect from its recorded evidence only. */
@@ -73,6 +75,7 @@ export class ProspectService {
     }
 
     const evidence = await this.leads.evidenceFor(lead.id);
+    const qualification = await this.leads.qualification(lead.id);
     const draft = await this.ai.writeOutreach(userId, {
       lead: evidence.lead,
       analysis: { website: evidence.website, presence: evidence.presence },
@@ -81,10 +84,12 @@ export class ProspectService {
         offer_summary: mission.offer_summary,
         outreach_instructions: mission.outreach_instructions,
         target_description: mission.target_description,
+        recommended_service: qualification?.recommended_service || null,
       },
       senderName: senderName || 'Nexora Outreach',
       senderEmail: connection.account_email || 'outreach',
       followUpNumber: Number(followUpNumber) || 0,
+      priorBodies: await this.messageQuality?.priorBodies(mission.id, lead.id),
     });
 
     const conversation = await this.conversations.ensure(lead.id, mission.id, userId);

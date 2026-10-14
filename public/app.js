@@ -655,6 +655,7 @@ async function renderLeadDetail(id) {
           <div><div class="card-label">Qualified</div><div class="mono" style="font-size:22px">${data.qualification.qualified ? 'yes' : 'no'}</div></div>
           <div><div class="card-label">Confidence</div><div class="mono" style="font-size:22px">${data.qualification.confidence != null ? `${Math.round(Number(data.qualification.confidence) * 100)}%` : '—'}</div></div>
         </div>
+        ${data.qualification.recommended_service ? `<div class="small" style="margin-top:4px"><span class="badge">${esc(String(data.qualification.recommended_service).replace(/_/g, ' '))}</span></div>` : ''}
         ${data.qualification.opportunity ? `<div class="small">${esc(data.qualification.opportunity)}</div>` : ''}
         <div class="small muted" style="margin-top:6px">${esc(data.qualification.reason || data.qualification.explanation || '')}</div>`
           : '<div class="faint small">Not qualified yet.</div>'}

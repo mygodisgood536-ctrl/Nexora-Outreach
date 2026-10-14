@@ -20,6 +20,9 @@ const PERMANENT = new Set([
   'NOT_FOUND',
   'FORBIDDEN',
   'UNAUTHENTICATED',
+  // A message that fails the deterministic outreach quality checks (spec §15)
+  // cannot be sent; retrying the same stored message will not change the result.
+  'MESSAGE_QUALITY_REJECTED',
   'SUPPRESSED',
   'DUPLICATE',
   'AI_INVALID_OUTPUT',
@@ -197,6 +200,11 @@ const FAILURE_GUIDANCE = {
     title: 'Not qualified',
     detail: 'The evidence did not support a contactable opportunity for this business.',
     action: 'Retry is not safe — this business is intentionally excluded.',
+  },
+  MESSAGE_QUALITY_REJECTED: {
+    title: 'Message failed quality checks',
+    detail: 'The message did not meet the outreach quality rules, so it was not sent.',
+    action: 'Reject this message and regenerate it, then review the new draft.',
   },
   HOURLY_LIMIT_REACHED: {
     title: 'Hourly sending limit reached',

@@ -28,6 +28,7 @@ export async function outreachHandler(ctx) {
   }
 
   const evidence = await leads.evidenceFor(lead.id);
+  const qualification = await leads.qualification(lead.id);
   const draft = await ai.writeOutreach(job.user_id, {
     lead: evidence.lead,
     analysis: { website: evidence.website, presence: evidence.presence },
@@ -36,10 +37,13 @@ export async function outreachHandler(ctx) {
       offer_summary: mission.offer_summary,
       outreach_instructions: mission.outreach_instructions,
       target_description: mission.target_description,
+      // §16: align the message to the controlled recommendation.
+      recommended_service: qualification?.recommended_service || null,
     },
     senderName: ctx.user?.full_name || 'Nexora Outreach',
     senderEmail: connection.account_email,
     followUpNumber: 0,
+    priorBodies: await services.messageQuality?.priorBodies(mission.id, lead.id),
   });
 
   const conversation = await conversations.ensure(lead.id, mission.id, job.user_id);
@@ -73,7 +77,7 @@ export async function outreachHandler(ctx) {
 /** §17/§27 — send an approved message through the authorized mailbox. */
 export async function emailHandler(ctx) {
   const { services, payload, job, mission } = ctx;
-  const { leads, conversations, notifications, email } = services;
+  const { leads, conversations, notifications, email, messageQuality } = services;
 
   const message = await conversations.message(payload.messageId);
   if (!message) throw err.notFound('Message');
@@ -108,6 +112,9 @@ export async function emailHandler(ctx) {
   const idempotencyKey = message.idempotency_key || sendKey(mission.id, lead.id, message.kind);
 
   try {
+    // §15 send boundary: the deterministic quality gate runs here too, so an
+    // approved, retried or queued message can never bypass the outreach rules.
+    await messageQuality.assertSendable(message);
     const result = await email.send(job.user_id, {
       to, subject: message.subject, text: message.body_text, idempotencyKey,
     });

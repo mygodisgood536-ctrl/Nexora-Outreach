@@ -83,7 +83,7 @@ export async function mailboxMonitorHandler(ctx) {
  */
 export async function followUpHandler(ctx) {
   const { services, payload, job } = ctx;
-  const { leads, conversations, ai, email, emailStore } = services;
+  const { leads, conversations, ai, email, emailStore, messageQuality } = services;
 
   const conversationId = payload.conversationId;
   if (!conversationId) throw err.validation('follow_up requires a conversationId');
@@ -118,6 +118,7 @@ export async function followUpHandler(ctx) {
 
   const connection = await emailStore.activeFor(job.user_id);
   const evidence = await leads.evidenceFor(lead.id);
+  const qualification = await leads.qualification(lead.id);
   const draft = await ai.writeOutreach(job.user_id, {
     lead: evidence.lead,
     analysis: { website: evidence.website, presence: evidence.presence },
@@ -125,10 +126,12 @@ export async function followUpHandler(ctx) {
       service: missionRow.service,
       offer_summary: missionRow.offer_summary,
       outreach_instructions: missionRow.outreach_instructions,
+      recommended_service: qualification?.recommended_service || null,
     },
     senderName: ctx.user?.full_name || 'Nexora Outreach',
     senderEmail: connection?.account_email,
     followUpNumber: pending.sequence,
+    priorBodies: await messageQuality?.priorBodies(pending.mission_id, lead.id),
   });
 
   const key = sendKey(pending.mission_id, lead.id, 'follow_up', pending.sequence);
@@ -141,6 +144,10 @@ export async function followUpHandler(ctx) {
   if (missionRow.sending_mode === 'review_send' && !message.approved) {
     return { conversationId, awaitingApproval: true, messageId: message.id };
   }
+
+  // §15 send boundary: never send a follow-up that fails the quality checks,
+  // regardless of how it was generated or approved.
+  await messageQuality.assertSendable(message);
 
   const result = await email.send(job.user_id, {
     to, subject: draft.subject, text: draft.body, idempotencyKey: key,

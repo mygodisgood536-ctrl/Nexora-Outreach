@@ -220,6 +220,9 @@ CREATE TABLE IF NOT EXISTS qualifications (
   observed         TEXT,
   opportunity      TEXT,
   relevant_service TEXT,
+  -- Spec §16: a controlled recommendation (full_redesign | homepage_improvement |
+  -- mobile_improvement | other | not_applicable), never a free-form slogan.
+  recommended_service TEXT,
   explanation      TEXT,
   error            TEXT,
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))

@@ -20,7 +20,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const txStore = new AsyncLocalStorage();
 
 /** Bumped whenever schema.sql / schema.postgres.sql change. */
-export const SCHEMA_VERSION = '6';
+export const SCHEMA_VERSION = '7';
 
 /** Arbitrary but stable advisory-lock key guarding schema application. */
 const SCHEMA_LOCK_ID = 728_190_431;
@@ -45,6 +45,8 @@ const POSTGRES_UPGRADES = [
   // message, so the operator can be told what failed and whether retry is safe.
   'ALTER TABLE automation_jobs ADD COLUMN IF NOT EXISTS error_code TEXT',
   'ALTER TABLE outreach_messages ADD COLUMN IF NOT EXISTS error_code TEXT',
+  // Spec §16: controlled redesign recommendation on the qualification.
+  'ALTER TABLE qualifications ADD COLUMN IF NOT EXISTS recommended_service TEXT',
 ];
 
 /**
@@ -60,6 +62,7 @@ const SQLITE_UPGRADES = [
   { table: 'missions', column: 'campaign_end_at', sql: 'ALTER TABLE missions ADD COLUMN campaign_end_at TEXT' },
   { table: 'automation_jobs', column: 'error_code', sql: 'ALTER TABLE automation_jobs ADD COLUMN error_code TEXT' },
   { table: 'outreach_messages', column: 'error_code', sql: 'ALTER TABLE outreach_messages ADD COLUMN error_code TEXT' },
+  { table: 'qualifications', column: 'recommended_service', sql: 'ALTER TABLE qualifications ADD COLUMN recommended_service TEXT' },
 ];
 
 export class Db {

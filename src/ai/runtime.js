@@ -156,21 +156,49 @@ export class AIRuntime {
     }
   }
 
-  /** Structured variant: asks for JSON and validates the parsed shape. */
-  async completeJson(userId, purpose, { system, prompt, validate, maxRetries = 2, timeoutMs } = {}) {
-    const askJson = `${prompt}\n\nRespond with a single valid JSON value and no other text.`;
-    const out = await this.complete(userId, purpose, { system, prompt: askJson, maxRetries, timeoutMs });
-    const parsed = extractJson(out.text);
-    if (parsed === null || parsed === undefined) {
-      throw err.ai('AI_INVALID_OUTPUT', `The AI response for "${purpose}" was not valid JSON.`);
-    }
-    if (typeof validate === 'function') {
-      const checked = validate(parsed);
-      if (checked !== true) {
+  /**
+   * Structured variant: asks for JSON and validates the parsed shape.
+   *
+   * When `validate` returns a non-empty string, that string is treated as
+   * corrective feedback and the model is asked again (up to `validateRetries`
+   * times) before the step fails. This lets a deterministic rule set — such as
+   * the message quality checks (spec §15) — regenerate a bad draft instead of
+   * storing or sending it.
+   */
+  async completeJson(userId, purpose, {
+    system, prompt, validate, maxRetries = 2, validateRetries = 0, timeoutMs,
+  } = {}) {
+    const suffix = 'Respond with a single valid JSON value and no other text.';
+    let fullPrompt = `${prompt}\n\n${suffix}`;
+    const maxRounds = Math.max(1, validateRetries + 1);
+    let lastError = null;
+
+    for (let round = 1; round <= maxRounds; round++) {
+      const out = await this.complete(userId, purpose, { system, prompt: fullPrompt, maxRetries, timeoutMs });
+      const parsed = extractJson(out.text);
+      if (parsed === null || parsed === undefined) {
+        lastError = err.ai('AI_INVALID_OUTPUT', `The AI response for "${purpose}" was not valid JSON.`);
+        if (round < maxRounds) {
+          fullPrompt = `${prompt}\n\nYour previous response was not valid JSON. ${suffix}`;
+          continue;
+        }
+        throw lastError;
+      }
+      if (typeof validate === 'function') {
+        const checked = validate(parsed);
+        if (checked === true) {
+          return { data: parsed, model: out.model, attempts: out.attempts };
+        }
+        if (typeof checked === 'string' && checked.trim() && round < maxRounds) {
+          fullPrompt = `${prompt}\n\nYour previous draft was rejected: ${checked.trim()}\n`
+            + `Revise it to fix every listed issue. ${suffix}`;
+          continue;
+        }
         throw err.ai('AI_INVALID_OUTPUT', `The AI response for "${purpose}" failed validation.`, checked);
       }
+      return { data: parsed, model: out.model, attempts: out.attempts };
     }
-    return { data: parsed, model: out.model, attempts: out.attempts };
+    throw lastError || err.ai('AI_INVALID_OUTPUT', `The AI response for "${purpose}" failed validation.`);
   }
 
   /** Runtime diagnostics for the Settings screen (no credentials included). */

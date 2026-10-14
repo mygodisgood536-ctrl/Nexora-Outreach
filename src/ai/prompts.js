@@ -147,6 +147,7 @@ PREVIOUS CONTACT STATE: ${previousContact || 'never contacted'}
 
 WHAT THE USER SELLS: ${mission.offer_summary || 'not specified'}
 WHO THEY TARGET: ${mission.target_description || 'not specified'}
+MISSION SERVICE: ${mission.service || 'not specified'}
 MISSION QUALIFICATION BAR:
 ${(mission.interpretation?.qualification_bar || []).map((c) => `- ${c}`).join('\n') || '- not specified'}
 
@@ -161,8 +162,15 @@ Return JSON:
   "observed": array of concrete things actually observed,
   "opportunity": string describing the opportunity,
   "relevant_service": string,
+  "recommended_service": one of "full_redesign" | "homepage_improvement" | "mobile_improvement" | "other" | "not_applicable",
   "explanation": string justifying the decision against the evidence
 }
+
+recommended_service is a controlled recommendation (spec §16), not a slogan:
+- "full_redesign" only when the evidence supports replacing the whole site.
+- "homepage_improvement" or "mobile_improvement" for a narrower, evidenced fix.
+- "other" for a non-website need, and "not_applicable" when nothing is recommended.
+Only recommend a redesign when the mission service is website_design AND the evidence supports it; otherwise prefer "other" or "not_applicable". Never force a redesign.
 
 If the evidence is too thin to justify contact, return qualified=false and explain what is missing. Do not qualify a business merely because it exists.`,
   };
@@ -184,7 +192,8 @@ TO: ${lead.businessName}${lead.contactRoute ? ` via ${lead.contactRoute}` : ''}
 LOCATION: ${[lead.city, lead.region, lead.country].filter(Boolean).join(', ') || 'unknown'}
 
 WHAT THE USER OFFERS: ${mission.offer_summary || 'not specified'}
-USER'S OUTREACH INSTRUCTIONS:
+${mission.recommended_service && mission.recommended_service !== 'not_applicable'
+    ? `QUALIFICATION'S RECOMMENDED SERVICE (align the ask to this, do not overstate it): ${mission.recommended_service}\n` : ''}USER'S OUTREACH INSTRUCTIONS:
 ${mission.outreach_instructions || 'Write short, friendly, natural outreach. Do not sound like a generic sales pitch.'}
 
 EVIDENCE ACTUALLY RECORDED FOR THIS BUSINESS (this is all you may refer to):

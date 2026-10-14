@@ -13,6 +13,7 @@ import { EmailConnectionStore } from './services/email-store.js';
 import { ConversationService } from './services/conversations.js';
 import { ProspectService } from './services/prospect.js';
 import { EvidenceService } from './services/evidence.js';
+import { MessageQualityService } from './services/message-quality.js';
 import { NotificationService } from './services/notifications.js';
 import { AuthService } from './services/auth.js';
 import { JobQueue, STAGE } from './workers/queue.js';
@@ -48,13 +49,15 @@ export function createSystem({ db, config: cfg = config, overrides = {} } = {}) 
   const auth = new AuthService({ db: database, sessionTtlHours: cfg.sessionTtlHours });
   const queue = new JobQueue(database);
   const evidence = new EvidenceService({ db: database });
-  const prospect = new ProspectService({ db: database, leads, conversations, ai: aiTasks, emailStore, queue, evidence });
+  // §15: deterministic, server-side message quality gate used at the send boundary.
+  const messageQuality = overrides.messageQuality ?? new MessageQualityService({ db: database, leads });
+  const prospect = new ProspectService({ db: database, leads, conversations, ai: aiTasks, emailStore, queue, evidence, messageQuality });
 
   const services = {
     ai: aiTasks,
     aiRuntime,
     missions, leads, suppression, conversations, notifications,
-    prospect, evidence,
+    prospect, evidence, messageQuality,
     emailStore, email, auth, queue, config: cfg,
     ...overrides.services,
   };

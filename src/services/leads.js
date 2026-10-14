@@ -116,19 +116,19 @@ export class LeadService {
     return this.presenceAnalysis(leadId);
   }
 
-  async saveQualification(leadId, { qualified, confidence, reason, observed, opportunity, relevantService, explanation, model, error }) {
+  async saveQualification(leadId, { qualified, confidence, reason, observed, opportunity, relevantService, recommendedService, explanation, model, error }) {
     await this.db.run(
       `INSERT INTO qualifications(lead_id, model, qualified, confidence, reason, observed, opportunity,
-                                   relevant_service, explanation, error)
-       VALUES(?,?,?,?,?,?,?,?,?,?)
+                                   relevant_service, recommended_service, explanation, error)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(lead_id) DO UPDATE SET
          model=excluded.model, qualified=excluded.qualified, confidence=excluded.confidence,
          reason=excluded.reason, observed=excluded.observed, opportunity=excluded.opportunity,
-         relevant_service=excluded.relevant_service, explanation=excluded.explanation,
-         error=excluded.error`,
+         relevant_service=excluded.relevant_service, recommended_service=excluded.recommended_service,
+         explanation=excluded.explanation, error=excluded.error`,
       leadId, model ?? null, qualified ? 1 : 0, confidence ?? null, reason ?? null,
       observed ? JSON.stringify(observed) : null, opportunity ?? null,
-      relevantService ?? null, explanation ?? null, error ?? null
+      relevantService ?? null, recommendedService ?? null, explanation ?? null, error ?? null
     );
     return this.qualification(leadId);
   }

@@ -108,6 +108,7 @@ Public routes (correctly `auth:false, csrf:false`): `/health`, `/api/health`,
 | Lead detail: identity, location, source, contact route | `GET /api/leads/:id` | OK |
 | Lead detail: website + presence analysis | `GET /api/leads/:id` | OK |
 | Lead detail: qualification / why selected | `GET /api/leads/:id` | OK |
+| Structured redesign decision (§16) | `GET /api/leads/:id` → `qualification.recommended_service` (controlled enum), recorded as `audit_evidence` kind `recommendation` | OK |
 | Rendered audit: broken-link integrity + PageSpeed performance (§12) | research stage → `website_analyses.evidence.linkIntegrity` / `.performance`, surfaced in `GET /api/leads/:id` and the versioned `audit_evidence` (`link_integrity`, `performance`) | OK |
 
 ---
@@ -120,6 +121,7 @@ Public routes (correctly `auth:false, csrf:false`): `/health`, `/api/health`,
 | Conversation detail + message history | `GET /api/conversations/:id` | OK |
 | Approve a drafted message | `POST /api/messages/:id/approve` | OK |
 | Reject a drafted message | `POST /api/messages/:id/reject` | OK (**GAP-1 closed**) |
+| Message quality enforced on every send path (§15) | deterministic gate in `src/services/message-quality.js`: applied at generation (regeneration via `completeJson` `validateRetries`) and at the send boundary in `emailHandler`/`followUpHandler`; failures raise `MESSAGE_QUALITY_REJECTED` (permanent) | OK |
 | Lead detail: conversation history inline | `GET /api/leads/:id` → `messages` | OK (**GAP-2a closed**) |
 | Lead detail: follow-up status | `GET /api/leads/:id` → `followUps` | OK (**GAP-2b closed**) |
 | Lead detail: suppression status | `GET /api/leads/:id` → `suppression` | OK (**GAP-2c closed**) |

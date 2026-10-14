@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { HttpTransport, CliTransport, createTransport } from '../../src/ai/transport.js';
@@ -157,6 +157,43 @@ test('transport: HTTP failures map onto the shared retry taxonomy', async () => 
   await assert.rejects(() => down.version(), (e) => e.code === 'AI_PROVIDER_ERROR' && e.retryable);
 });
 
+test('AIRuntime.completeJson: validation feedback regenerates the draft', async () => {
+  const texts = ['{"x":1}', '{"x":2}'];
+  const prompts = [];
+  const ai = new AIRuntime({
+    db: fakeDb(),
+    transport: { async runPrompt(full) { prompts.push(full); return { text: texts.shift() }; } },
+  });
+
+  let seen = 0;
+  const out = await ai.completeJson(1, 'p', {
+    prompt: 'draft it',
+    validateRetries: 2,
+    validate: (d) => { seen++; return d.x === 2 ? true : 'fix issue X'; },
+  });
+  assert.equal(out.data.x, 2);
+  assert.equal(seen, 2, 'the draft was regenerated once');
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /fix issue X/, 'feedback is fed back to the model');
+});
+
+test('AIRuntime.completeJson: exhausted validation retries are a permanent AI error', async () => {
+  const ai = new AIRuntime({
+    db: fakeDb(),
+    transport: { async runPrompt() { return { text: '{"x":0}' }; } },
+  });
+  let calls = 0;
+  await assert.rejects(
+    () => ai.completeJson(1, 'p', {
+      prompt: 'draft it',
+      validateRetries: 2,
+      validate: () => { calls++; return 'always wrong'; },
+    }),
+    (e) => e.code === 'AI_INVALID_OUTPUT' && !e.retryable,
+  );
+  assert.equal(calls, 3, 'one initial attempt plus two regenerations');
+});
+
 test('AIRuntime over HTTP: catalog, complete and diagnose use the transport', async () => {
   const db = fakeDb();
   const fetch = stubFetch((req) => {
@@ -186,3 +223,4 @@ test('AIRuntime over HTTP: catalog, complete and diagnose use the transport', as
   assert.equal(diag.bin, null, 'no binary is involved over HTTP');
   assert.equal(JSON.stringify(diag).includes('password'), false);
 });
+

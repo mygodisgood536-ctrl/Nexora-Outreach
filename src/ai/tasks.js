@@ -3,6 +3,7 @@ import {
   buildMissionInterpretation, buildSiteAnalysis, buildPresenceAnalysis,
   buildQualification, buildOutreach, buildReplyTriage, buildProspectQuestion,
 } from './prompts.js';
+import { assessMessage, qualityFeedback, RECOMMENDED_SERVICES } from '../services/message-quality.js';
 
 /**
  * High-level AI operations used by the worker handlers.
@@ -20,6 +21,7 @@ const isStrArray = (v) => Array.isArray(v) && v.every(isStr);
 
 export const VALID_SERVICES = ['website_design', 'email_marketing', 'seo', 'social_media', 'branding', 'other'];
 export const VALID_INTENTS = ['interested', 'not_interested', 'asks_for_more', 'asks_questions', 'unsubscribes', 'unknown'];
+export { RECOMMENDED_SERVICES };
 const ISO2 = /^[A-Z]{2}$/;
 const pct = (v) => isNum(v) && v >= 0 && v <= 100;
 
@@ -109,26 +111,51 @@ export class AITasks {
         }
         if (!isStrArray(d.observed)) return 'observed must be an array of strings';
         if (d.qualified && !isStr(d.reason)) return 'a qualified lead needs a "reason"';
+        // §16: the recommendation must be a controlled value, not a free string,
+        // so the workspace can reason about it. Missing values default to
+        // "other" so a non-website mission is never forced into a redesign.
+        if (d.recommended_service !== undefined && d.recommended_service !== null
+          && !RECOMMENDED_SERVICES.includes(d.recommended_service)) {
+          return `recommended_service must be one of ${RECOMMENDED_SERVICES.join('|')}`;
+        }
         return true;
       },
     });
-    return { ...data, model };
+    return {
+      ...data,
+      recommended_service: RECOMMENDED_SERVICES.includes(data.recommended_service)
+        ? data.recommended_service
+        : 'other',
+      model,
+    };
   }
 
-  /** Spec §15/§16 — individualized outreach. */
-  async writeOutreach(userId, { lead, analysis, mission, senderName, senderEmail, followUpNumber = 0 }) {
+  /**
+   * Spec §15/§16 — individualized outreach.
+   *
+   * The self-reported `checks` are advisory only; the server-side
+   * `assessMessage` rules are authoritative and, when a draft fails, are fed
+   * back to the model for regeneration before anything is stored.
+   */
+  async writeOutreach(userId, {
+    lead, analysis, mission, senderName, senderEmail, followUpNumber = 0, priorBodies = [],
+  }) {
     const { system, prompt } = buildOutreach({
       lead, analysis, mission, senderName, senderEmail, followUpNumber,
     });
     const { data, model } = await this.ai.completeJson(userId, 'write_outreach', {
-      system, prompt, maxRetries: 1,
+      system, prompt, maxRetries: 1, validateRetries: 2,
       validate: (d) => {
         if (!d || typeof d !== 'object') return 'response is not an object';
         if (!isStr(d.subject) || !d.subject.trim()) return 'subject is required';
         if (!isStr(d.body) || d.body.trim().length < 20) return 'body is required';
-        if (!d.checks || typeof d.checks !== 'object') return 'checks object is required';
-        if (d.checks.claims_nothing_unobserved !== true) {
-          return 'the model reported an unobserved claim; regenerating (spec §15)';
+        const report = assessMessage(
+          { subject: d.subject, body: d.body, referenced_observations: d.referenced_observations },
+          { lead, analysis, mission, followUpNumber, priorBodies },
+        );
+        if (!report.ok) return qualityFeedback(report);
+        if (d.checks && d.checks.claims_nothing_unobserved === false) {
+          return 'the model reported an unobserved claim; remove any claim that is not in the recorded evidence';
         }
         return true;
       },

@@ -65,6 +65,7 @@ export function makeFakeAI(overrides = {}) {
       observed: ['no viewport meta tag'],
       opportunity: 'Mobile-friendly redesign',
       relevant_service: 'website_design',
+      recommended_service: 'mobile_improvement',
       explanation: 'The recorded evidence supports a clear redesign opportunity.',
     },
     write_outreach: {

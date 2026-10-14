@@ -54,6 +54,11 @@ test('pipeline: a mission runs discovery -> research -> analysis -> qualificatio
   const q = await system.leads.qualification(lead.id);
   assert.equal(q.qualified, 1);
   assert.ok(q.reason.includes('viewport'), 'the reason cites recorded evidence');
+  // §16: the structured recommendation is stored and captured as evidence.
+  assert.equal(q.recommended_service, 'mobile_improvement', 'a controlled recommendation is recorded');
+
+  const auditKinds = (await system.evidence.latestForLead(lead.id)).evidence.map((e) => e.kind);
+  assert.ok(auditKinds.includes('recommendation'), 'the recommendation is versioned evidence');
 
   assert.equal(email.sent.length, 1, 'exactly one message was sent');
   assert.equal(email.sent[0].to, 'hello@abcrestaurant.com');
@@ -103,6 +108,31 @@ test('pipeline: replaying the run does not duplicate leads or sends', async () =
   assert.equal((await system.leads.list(user.id)).length, 1, 'duplicate lead prevented');
   assert.equal(email.sent.length, 1, 'duplicate send prevented');
 });
+test('pipeline: a message that fails the quality checks is never sent (spec 15)', async () => {
+  const { db, system, email } = await setup({
+    // Force a filler-laden, ungrounded draft. The generation-time self-report is
+    // bypassed by the fake runtime on purpose: the send-boundary gate must still
+    // refuse it, proving the rules cannot be bypassed by a stored message.
+    aiOverrides: {
+      write_outreach: (d) => ({
+        ...d,
+        subject: 'Hello',
+        body: 'I hope this email finds you well. I wanted to reach out about your growing business and offer a brand new website with great results.',
+        referenced_observations: [],
+      }),
+    },
+  });
+  const { user, mission } = await seedFullStack(db);
+  await runDiscovery(system, user, mission);
+  const jobs = await drain(system.worker);
+
+  assert.equal(email.sent.length, 0, 'a failing message is never sent');
+  const emailJob = jobs.find((j) => j.stage === STAGE.EMAIL);
+  assert.ok(emailJob, 'the send step ran');
+  assert.equal(emailJob.status, 'failed');
+  assert.equal(emailJob.error_code, 'MESSAGE_QUALITY_REJECTED');
+});
+
 test('pipeline: an unqualified lead is closed and never contacted', async () => {
   const { db, system, email } = await setup({
     aiOverrides: { qualify: (d) => ({ ...d, qualified: false, reason: 'no opportunity found' }) },

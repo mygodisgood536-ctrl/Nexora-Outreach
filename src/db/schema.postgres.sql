@@ -231,6 +231,8 @@ CREATE TABLE IF NOT EXISTS qualifications (
   observed         TEXT,
   opportunity      TEXT,
   relevant_service TEXT,
+  -- Spec §16: a controlled recommendation, never a free-form slogan.
+  recommended_service TEXT,
   explanation      TEXT,
   error            TEXT,
   created_at       TEXT NOT NULL DEFAULT (to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS'))

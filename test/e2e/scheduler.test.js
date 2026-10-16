@@ -253,3 +253,35 @@ test('scheduler: a mailbox with nothing sent is never polled', async () => {
   assert.equal((await db.all("SELECT * FROM automation_jobs WHERE stage = 'mailbox_monitor'")).length, 0);
   assert.ok(user.id);
 });
+
+/**
+ * Spec §35 — "Test Changing Schedule". Editing the days, windows and timezone of
+ * a live mission must change what the scheduler actually does, immediately and
+ * without a manual restart: the old windows stop firing and the new ones start.
+ */
+test('scheduler: editing a mission schedule changes what fires, without a manual start (spec 35)', async () => {
+  const { system, db } = await setup();
+  const { user, mission } = await withMission(system, {
+    mission: { windows: [{ dayOfWeek: 1, startMin: 600, endMin: 780 }] }, // Mon 10:00-13:00
+  });
+  assert.equal((await system.scheduler.dueMissions(MONDAY(11))).length, 1, 'the original Monday window fires');
+
+  // The user edits the schedule in place: Monday is removed and a Tuesday
+  // window in a different timezone is added. No new mission, no restart.
+  await system.missions.update(mission.id, {
+    timezone: 'Africa/Lagos',
+    windows: [{ dayOfWeek: 2, startMin: 14 * 60, endMin: 18 * 60 }], // Tue 14:00-18:00 Lagos
+  });
+
+  assert.equal((await system.scheduler.dueMissions(MONDAY(11))).length, 0, 'the removed window no longer fires');
+  assert.equal((await system.scheduler.tick(MONDAY(11))).length, 0, 'and no job is enqueued for it');
+
+  // Tuesday 13:30 UTC is 14:30 Lagos, inside the new window.
+  const TUESDAY_1330 = new Date(Date.UTC(2026, 1, 10, 13, 30));
+  assert.equal((await system.scheduler.dueMissions(TUESDAY_1330)).length, 1, 'the new day and window fire');
+  assert.equal((await system.scheduler.tick(TUESDAY_1330)).length, 1);
+
+  const scheduled = await db.all('SELECT stage, status FROM automation_jobs');
+  assert.ok(scheduled.some((j) => j.stage === 'discovery'), 'the new window produced real discovery work');
+  assert.ok(user.id);
+});

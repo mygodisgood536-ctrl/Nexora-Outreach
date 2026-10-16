@@ -125,7 +125,7 @@ async function recordEvidence(audit, auditId, lead, job, item) {
 /** §14 — decide whether the prospect is relevant and has a real opportunity. */
 export async function qualificationHandler(ctx) {
   const { services, payload, job, mission } = ctx;
-  const { leads, ai, queue, evidence: audit } = services;
+  const { leads, ai, queue, notifications, missions, evidence: audit } = services;
   const lead = await leads.get(payload.leadId);
   if (!lead) throw err.notFound('Lead');
 
@@ -185,10 +185,39 @@ export async function qualificationHandler(ctx) {
   }
 
   await leads.setStatus(lead.id, 'qualified');
+  // §25 — "high-priority lead found": the operator is told when a prospect is
+  // worth looking at now, rather than having to watch the prospect list. A lead
+  // is high priority when it sits in a target the user marked High, or when the
+  // qualification confidence is very strong.
+  await notifyHighPriority({ services, notifications, missions, mission, lead, result, job });
   await queue.enqueue({
     userId: job.user_id, missionId: lead.mission_id,
     stage: STAGE.OUTREACH, payload: { leadId: lead.id },
     idempotencyKey: `outreach:${lead.id}`,
   });
   return { leadId: lead.id, qualified: true, confidence: result.confidence, model: result.model };
+}
+
+/** §25 — raise the high-priority-lead signal; never fails the qualification itself. */
+async function notifyHighPriority({ notifications, missions, mission, lead, result, job }) {
+  if (!notifications) return;
+  try {
+    const confidence = Number(result.confidence ?? 0);
+    const norm = (v) => String(v || '').trim().toLowerCase();
+    let highPriorityTarget = false;
+    if (mission) {
+      const targets = await missions.locations(mission.id);
+      highPriorityTarget = targets.some((t) =>
+        t.priority === 'high'
+        && norm(t.country) === norm(lead.country)
+        && (!t.city || norm(t.city) === norm(lead.city)));
+    }
+    if (!highPriorityTarget && confidence < 0.85) return;
+    await notifications.create(job.user_id, {
+      kind: 'high_priority_lead', severity: 'info',
+      title: `High-priority prospect: ${lead.business_name}`,
+      body: result.opportunity || result.reason || 'Qualified with strong confidence.',
+      missionId: mission?.id ?? null, leadId: lead.id,
+    });
+  } catch { /* a notification failure must never fail the pipeline stage */ }
 }

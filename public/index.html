@@ -4,13 +4,29 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
-  <meta name="theme-color" content="#05060f" />
+  <meta name="theme-color" content="#070a12" />
   <title>Nexora Outreach</title>
-  <meta name="description" content="AI-powered prospecting and outreach, on autopilot." />
+  <meta name="description" content="AI-powered prospecting and outreach, on autopilot. Discover businesses, research their public presence, personalise outreach, monitor replies and follow up automatically." />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <!-- Splash: painted before the app script runs, so the first frame is the
+       brand rather than a blank page. The app removes it once it has data. -->
+  <div id="splash" class="splash" aria-hidden="true">
+    <div class="splash-orb splash-orb-a"></div>
+    <div class="splash-orb splash-orb-b"></div>
+    <div class="splash-inner">
+      <div class="splash-mark"><img src="/favicon.svg" alt="" /></div>
+      <div class="splash-name">NEXORA <span>OUTREACH</span></div>
+      <div class="splash-tag">AI-powered prospecting and outreach, on autopilot.</div>
+      <div class="splash-bar"><span></span></div>
+    </div>
+  </div>
+
   <div id="app" class="app"></div>
   <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true"></div>
   <div id="modal-root"></div>

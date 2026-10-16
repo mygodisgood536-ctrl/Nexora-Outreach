@@ -226,16 +226,26 @@ function renderAuth() {
   };
 
   app.innerHTML = `
-    <div class="auth-wrap">
-      <div class="auth-card">
-        <div class="auth-head">
-          <img class="brand-logo" src="/favicon.svg" alt="" />
-          <h1>NEXORA OUTREACH</h1>
-          <div class="faint small" style="letter-spacing:.2em">AUTONOMOUS PROSPECTING CONSOLE</div>
+    <div class="welcome">
+      <section class="welcome-hero">
+        <span class="eyebrow">AI outreach autopilot</span>
+        <h1 class="display-xl">Find the right businesses. <em>Reach them personally.</em> Follow up automatically.</h1>
+        <p class="lead">Nexora discovers prospects, investigates their public presence, writes outreach in your voice, monitors for replies and follows up — on a schedule you control.</p>
+        <ul class="hero-list">
+          <li><span class="ico">◎</span><div><b>Scout &amp; qualify</b><div class="faint small">Every candidate is researched and scored against your mission before any message is written.</div></div></li>
+          <li><span class="ico">✍</span><div><b>Write &amp; send</b><div class="faint small">Personalised outreach in scout-only, review-and-send, or full autopilot mode.</div></div></li>
+          <li><span class="ico">↺</span><div><b>Monitor &amp; follow up</b><div class="faint small">Replies are detected, follow-ups are scheduled, and you are told when anything needs you.</div></div></li>
+        </ul>
+      </section>
+
+      <section class="welcome-auth">
+        <div class="brand-mark">
+          <img src="/favicon.svg" alt="" />
+          <div class="word">Nexora<small>Outreach</small></div>
         </div>
         <div class="tabs">${tabs.map(([id, l]) => `<button class="${authTab === id ? 'on' : ''}" data-act="auth-tab" data-tab="${id}">${l}</button>`).join('')}</div>
         <div class="panel pad-lg">${forms[authTab] || forms.login}</div>
-      </div>
+      </section>
     </div>`;
 
   if (authTab === 'signup') {
@@ -269,6 +279,53 @@ async function afterAuth(user) {
 // ============================================================
 // DASHBOARD
 // ============================================================
+/**
+ * The first-run journey (§3/§5): a brand-new account is walked from an empty
+ * console to a live mission. It is derived from real state, so it disappears on
+ * its own once the three steps are genuinely done.
+ */
+function onboardingPanel(dash, attention) {
+  const steps = [
+    {
+      done: !attention.some((a) => a.kind === 'mailbox_not_connected'),
+      title: 'Connect a mailbox',
+      hint: 'Nexora sends through your own connected account.',
+      cta: `<button class="btn small" data-nav="settings">Open Control</button>`,
+    },
+    {
+      done: (dash.missions.total || 0) > 0,
+      title: 'Create your first mission',
+      hint: 'Describe what you sell and who you want to reach.',
+      cta: `<button class="btn small" data-act="new-mission">＋ New mission</button>`,
+    },
+    {
+      done: (dash.missions.active || 0) > 0,
+      title: 'Activate it',
+      hint: 'The scheduler begins scouting at the next send window.',
+      cta: `<button class="btn small" data-nav="missions">View missions</button>`,
+    },
+  ];
+  if (steps.every((s) => s.done)) return '';
+  const doneCount = steps.filter((s) => s.done).length;
+  return `<div class="panel" style="margin-bottom:18px">
+    <div class="spread" style="margin-bottom:12px">
+      <div>
+        <div class="card-label">Getting started</div>
+        <div class="display-md" style="margin-top:6px">Set up your first campaign</div>
+      </div>
+      <span class="badge cyan">${doneCount} of ${steps.length} done</span>
+    </div>
+    <div class="onboard-steps">
+      ${steps.map((s, i) => `
+        <div class="onboard-step ${s.done ? 'done' : ''}">
+          <span class="step-num">${s.done ? '✓' : i + 1}</span>
+          <div class="body"><b>${s.title}</b><span>${s.hint}</span></div>
+          ${s.done ? '<span class="badge green">done</span>' : s.cta}
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
 async function renderDashboard() {
   const [dash, notifs] = await Promise.all([api('/api/dashboard'), api('/api/notifications?limit=1')]);
   navCounts.unread = notifs.unread || 0;
@@ -284,6 +341,7 @@ async function renderDashboard() {
   };
 
   setView(`
+    ${onboardingPanel(dash, attention)}
     <div class="grid cols-4" style="margin-bottom:18px">
       ${stat('Missions', dash.missions.total, `${num(dash.missions.active)} active`)}
       ${stat('Prospects', dash.leads.discovered, `${num(dash.leads.qualified)} qualified`)}
@@ -370,11 +428,12 @@ async function renderMissionDetail(id) {
       ${badge(m.status)}
     </div>
     <div class="panel pad-lg" style="margin-bottom:16px">
-      <h2 style="font-size:22px">${esc(m.name)}</h2>
-      <div class="faint small" style="margin-top:4px">${esc(titleCase(m.service || ''))} · ${esc(m.sendingMode || '')} · ${esc(m.timezone || 'UTC')}</div>
+      <h2 class="display-md">${esc(m.name)}</h2>
+      <div class="faint small" style="margin-top:4px">${esc(titleCase(m.service || ''))} · ${esc(titleCase(m.sendingMode || ''))} · ${esc(m.timezone || 'UTC')}</div>
       <div class="row" style="gap:10px;margin-top:16px">
+        <button class="btn primary" data-act="edit-mission" data-id="${id}">Edit mission</button>
         ${actions.map(([a, l]) => `<button class="btn" data-act="mission-action" data-id="${id}" data-action="${a}">${l}</button>`).join('')}
-        <button class="btn" data-act="mission-delete" data-id="${id}" style="margin-left:auto;border-color:rgba(255,107,129,.4);color:var(--red)">Delete</button>
+        <button class="btn danger" data-act="mission-delete" data-id="${id}" style="margin-left:auto">Archive</button>
       </div>
     </div>
 
@@ -382,7 +441,7 @@ async function renderMissionDetail(id) {
       <div class="panel">
         <div class="section-head"><h2>Targets</h2></div>
         ${(m.locations || []).length ? m.locations.map((l) => `<div class="row spread" style="padding:6px 0;border-bottom:1px dashed var(--line)">
-          <span>${esc([l.city, l.region, l.country].filter(Boolean).join(', '))}</span><span class="badge faint">${esc(l.priority || 'normal')}</span></div>`).join('') : '<div class="faint small">No locations.</div>'}
+          <span>${esc([l.city, l.region, l.country].filter(Boolean).join(', '))}</span><span class="badge ${l.priority === 'high' ? 'amber' : 'faint'}">${esc(l.priority || 'medium')}</span></div>`).join('') : '<div class="faint small">No locations.</div>'}
       </div>
       <div class="panel">
         <div class="section-head"><h2>Windows</h2></div>
@@ -441,21 +500,24 @@ async function renderMissionDetail(id) {
     </div>`);
 }
 
-// ── mission creation modal ──────────────────────────────────
-function openMissionModal(prefill = {}) {
+// ── mission create / edit modal ─────────────────────────────
+function openMissionModal(prefill = {}, mode = 'new') {
   const m = prefill;
-  const locs = m.locations || [{ country: '', city: '', priority: 'high' }];
-  const wins = m.windows || [{ dayOfWeek: 1, startMin: '09:00', endMin: '17:00' }];
+  const editing = mode === 'edit' && m.id;
+  const locs = (m.locations && m.locations.length) ? m.locations : [{ country: '', city: '', priority: 'high' }];
+  const wins = (m.windows && m.windows.length) ? m.windows : [{ dayOfWeek: 1, startMin: '09:00', endMin: '17:00' }];
+  const title = editing ? 'Edit mission' : (mode === 'duplicate' ? 'Duplicate mission' : 'New mission');
+  const submitLabel = editing ? 'Save changes' : (mode === 'duplicate' ? 'Create duplicate' : 'Create mission');
   const modal = openModal(`
-    <form data-form="mission">
+    <form data-form="mission" data-mode="${editing ? 'edit' : mode}" data-mission-id="${editing ? m.id : ''}">
       <div class="spread" style="margin-bottom:14px">
-        <h2 style="font-size:18px">${m.id ? 'Duplicate mission' : 'New mission'}</h2>
+        <h2 class="display-md">${title}</h2>
         <button type="button" class="btn small" data-act="close-modal">✕</button>
       </div>
 
-      <div class="panel" style="margin-bottom:14px;background:rgba(56,230,255,.06)">
+      <div class="panel" style="margin-bottom:14px;background:rgba(124,156,255,.06)">
         <label class="card-label">Describe the mission in plain language</label>
-        <textarea name="objective" rows="3" placeholder="Find restaurants in Austin with weak websites and offer a redesign." style="margin-top:8px"></textarea>
+        <textarea name="objective" rows="3" placeholder="Find restaurants in Austin with weak websites and offer a redesign." style="margin-top:8px">${esc(m.objectiveRaw || '')}</textarea>
         <div class="row" style="margin-top:8px">
           <button type="button" class="btn small" data-act="interpret">✦ Interpret with AI</button>
           <span class="faint small" id="interpret-note"></span>
@@ -479,7 +541,7 @@ function openMissionModal(prefill = {}) {
         <div>
           <label class="small muted">Sending mode</label>
           <select name="sendingMode">
-            ${[['scout_only', 'Scout only (no email)'], ['review', 'Review & send (I approve)'], ['autopilot', 'Autopilot (send automatically)']].map(([v, l]) => `<option value="${v}" ${(m.sendingMode || 'scout_only') === v ? 'selected' : ''}>${l}</option>`).join('')}
+            ${[['scout_only', 'Scout only (no email)'], ['review_send', 'Review & send (I approve)'], ['autopilot', 'Autopilot (send automatically)']].map(([v, l]) => `<option value="${v}" ${(m.sendingMode || 'scout_only') === v ? 'selected' : ''}>${l}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -511,7 +573,7 @@ function openMissionModal(prefill = {}) {
 
       <div class="row" style="margin-top:18px;justify-content:flex-end">
         <button type="button" class="btn" data-act="close-modal">Cancel</button>
-        <button class="btn" type="submit" style="background:linear-gradient(90deg,var(--cyan),var(--violet));color:#04040f;font-weight:700">${m.id ? 'Create duplicate' : 'Create mission'}</button>
+        <button class="btn primary" type="submit">${submitLabel}</button>
       </div>
     </form>`);
   modal.querySelector('input[name="name"]').focus();
@@ -521,7 +583,7 @@ function locRow(l = {}) {
   return `<div class="row loc-row" style="margin-bottom:8px">
     <input class="loc-country" placeholder="Country (US)" value="${esc(l.country || '')}" style="max-width:120px" />
     <input class="loc-city" placeholder="City" value="${esc(l.city || '')}" />
-    <select class="loc-priority" style="max-width:130px">${['high', 'normal', 'low'].map((p) => `<option value="${p}" ${(l.priority || 'high') === p ? 'selected' : ''}>${titleCase(p)}</option>`).join('')}</select>
+    <select class="loc-priority" style="max-width:130px">${['high', 'medium', 'low'].map((p) => `<option value="${p}" ${(l.priority || 'high') === p ? 'selected' : ''}>${titleCase(p)}</option>`).join('')}</select>
     <button type="button" class="btn small" data-act="del-row">✕</button>
   </div>`;
 }
@@ -619,7 +681,10 @@ async function renderLeads() {
 async function renderLeadDetail(id) {
   const data = await api(`/api/leads/${id}`);
   const l = data.lead;
+  const lead = l;
   const suppression = data.suppression || {};
+  const conversation = data.conversation || null;
+  const followUps = data.followUps || [];
   setView(`
     <div class="spread" style="margin-bottom:14px">
       <button class="btn small" data-nav="leads">← All prospects</button>
@@ -665,6 +730,33 @@ async function renderLeadDetail(id) {
 
     <div class="panel" style="margin-bottom:16px">
       <div class="spread">
+        <div class="section-head" style="margin:0"><h2>Conversation &amp; follow-ups</h2></div>
+        ${conversation ? `<button class="btn small" data-nav="inbox/${conversation.id}">Open thread</button>` : ''}
+      </div>
+      ${conversation ? `
+        <div class="row" style="gap:22px;margin-bottom:12px">
+          <div><div class="card-label">Status</div><div style="margin-top:6px">${badge(conversation.status)}</div></div>
+          <div><div class="card-label">Replies</div><div class="mono" style="font-size:20px">${num(conversation.reply_count)}</div></div>
+          <div><div class="card-label">Last outbound</div><div class="small muted" style="padding-top:8px">${esc(conversation.last_outbound_at ? fmtRel(conversation.last_outbound_at) : '—')}</div></div>
+          <div><div class="card-label">Last inbound</div><div class="small muted" style="padding-top:8px">${esc(conversation.last_inbound_at ? fmtRel(conversation.last_inbound_at) : '—')}</div></div>
+        </div>
+        ${suppression.suppressed
+          ? `<div class="badge red">Not contactable · ${esc(suppression.scope || '')} · ${esc(suppression.reason || '')}</div>`
+          : '<div class="badge green">Contactable</div>'}
+        <div class="section-head" style="margin-top:16px"><h2>Follow-up schedule</h2></div>
+        ${followUps.length ? `<div class="table-wrap"><table class="table">
+          <thead><tr><th>#</th><th>Due</th><th>Status</th><th>Note</th></tr></thead><tbody>
+          ${followUps.map((f) => `<tr>
+            <td class="mono small">${esc(f.sequence)}</td>
+            <td class="small muted">${esc(fmtDate(f.due_at))} <span class="faint">(${esc(fmtRel(f.due_at))})</span></td>
+            <td>${badge(f.status)}</td>
+            <td class="small faint">${esc(f.reason_cancelled || '')}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="faint small">No follow-ups scheduled.</div>'}`
+        : '<div class="faint small">No conversation yet — no outreach has been sent for this prospect.</div>'}
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
+      <div class="spread">
         <div class="section-head" style="margin:0"><h2>Ask about this prospect</h2></div>
         <div class="row" style="gap:8px">
           <button class="btn small" data-act="refresh-evidence" data-id="${lead.id}">Refresh evidence</button>
@@ -682,7 +774,7 @@ async function renderLeadDetail(id) {
     <div class="panel" style="margin-bottom:16px">
       <div class="section-head"><h2>Messages</h2></div>
       ${(data.messages || []).length ? data.messages.map((msg) => `
-        <div class="panel" style="background:rgba(56,230,255,.04);margin-bottom:10px">
+        <div class="panel" style="background:rgba(124,156,255,.04);margin-bottom:10px">
           <div class="spread"><b>${esc(msg.subject)}</b>${badge(msg.send_status)}</div>
           <div class="small muted" style="margin-top:8px;white-space:pre-wrap">${esc((msg.body_text || '').slice(0, 600))}</div>
           ${msg.error ? `<div class="badge red" style="margin-top:8px">${esc(String(msg.error).slice(0, 200))}</div>` : ''}
@@ -750,7 +842,7 @@ function auditScreenshot(audit) {
   return `<div style="margin:10px 0">
     <div class="card-label">Rendered screenshot${p.width ? ` · ${esc(p.width)}×${esc(p.height)}` : ''}${p.strategy ? ` · ${esc(p.strategy)}` : ''}</div>
     <img src="${esc(p.dataUri)}" alt="Rendered screenshot of the website" loading="lazy" decoding="async"
-      style="max-width:100%;border:1px solid rgba(56,230,255,.25);border-radius:10px;margin-top:6px" />
+      style="max-width:100%;border:1px solid rgba(124,156,255,.25);border-radius:10px;margin-top:6px" />
   </div>`;
 }
 
@@ -833,7 +925,7 @@ async function renderConversation(id) {
     <div class="panel pad-lg">
       <div class="section-head"><h2>Thread</h2></div>
       ${msgs.length ? `<div class="stack">${msgs.map((m) => `
-        <div class="panel" style="background:rgba(56,230,255,.04)">
+        <div class="panel" style="background:rgba(124,156,255,.04)">
           <div class="spread"><b>${esc(m.subject)}</b><div class="row">${badge(m.kind || 'message')}${badge(m.send_status)}</div></div>
           <div class="small muted" style="margin-top:8px;white-space:pre-wrap">${esc(m.body_text || '')}</div>
           <div class="faint small" style="margin-top:8px">${esc(fmtDate(m.sent_at || m.created_at))}</div>
@@ -1080,6 +1172,11 @@ async function runAction(act, el) {
 
       case 'interpret': return interpretMission(el);
 
+      case 'edit-mission': {
+        const { mission } = await api(`/api/missions/${el.dataset.id}`);
+        openMissionModal(mission, 'edit');
+        return;
+      }
       case 'mission-action': {
         const id = el.dataset.id; const action = el.dataset.action;
         const map = { activate: 'activate', pause: 'pause', resume: 'resume', stop: 'stop', 'run-now': 'run-now', duplicate: 'duplicate' };
@@ -1091,9 +1188,9 @@ async function runAction(act, el) {
         render(); return;
       }
       case 'mission-delete': {
-        if (!confirm('Delete this mission and all of its prospects? This cannot be undone.')) return;
+        if (!confirm('Archive this mission? It stops running and is hidden from the active list, but its prospects are kept.')) return;
         await api(`/api/missions/${el.dataset.id}`, { method: 'DELETE' });
-        toast('Mission deleted', 'ok'); go('missions'); return;
+        toast('Mission archived', 'ok'); go('missions'); return;
       }
       case 'approve': await api(`/api/messages/${el.dataset.id}/approve`, { method: 'POST', body: {} }); toast('Message approved and queued', 'ok'); render(); return;
       case 'reject': await api(`/api/messages/${el.dataset.id}/reject`, { method: 'POST', body: {} }); toast('Message rejected', 'ok'); render(); return;
@@ -1109,7 +1206,7 @@ async function runAction(act, el) {
           const r = await api(`/api/leads/${id}/ask`, { method: 'POST', body: { question } });
           if (out) out.innerHTML = `<div class="small" style="white-space:pre-wrap">${esc(r.answer)}</div>${(r.observed || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">${r.observed.map((o) => `<span class="badge faint">${esc(o)}</span>`).join('')}</div>` : ''}`;
         } catch (e) {
-          if (out) out.innerHTML = `<div class="small" style="color:#ff6b6b">${esc(e.message)}</div>`;
+          if (out) out.innerHTML = `<div class="small" style="color:var(--red)">${esc(e.message)}</div>`;
         } finally { el.disabled = false; }
         return;
       }
@@ -1142,7 +1239,7 @@ async function runAction(act, el) {
       }
       case 'gen-recovery': {
         const r = await api('/api/auth/recovery-code', { method: 'POST', body: {} });
-        document.getElementById('recovery-box').innerHTML = `<div class="panel" style="margin-top:12px;background:rgba(56,230,255,.06)"><div class="card-label">One-time recovery code</div><div class="mono" style="margin-top:6px;user-select:all">${esc(r.recoveryCode || r.code || '')}</div></div>`;
+        document.getElementById('recovery-box').innerHTML = `<div class="panel" style="margin-top:12px;background:rgba(124,156,255,.06)"><div class="card-label">One-time recovery code</div><div class="mono" style="margin-top:6px;user-select:all">${esc(r.recoveryCode || r.code || '')}</div></div>`;
         return;
       }
       case 'refresh-catalog': { await api('/api/ai/settings?refresh=1'); toast('Catalog refreshed', 'ok'); renderSettings(); return; }
@@ -1249,6 +1346,13 @@ async function runForm(name, form) {
       const body = readMissionForm(form);
       if (!body.name) { toast('A mission name is required.', 'err'); return; }
       if (!body.locations.length) { toast('Add at least one target location.', 'err'); return; }
+      const missionId = form.dataset.missionId;
+      if (form.dataset.mode === 'edit' && missionId) {
+        await api(`/api/missions/${missionId}`, { method: 'PATCH', body });
+        closeModal();
+        toast('Mission updated', 'ok');
+        go(`missions/${missionId}`); return;
+      }
       const r = await api('/api/missions', { method: 'POST', body });
       closeModal();
       toast('Mission created', 'ok');
@@ -1281,12 +1385,23 @@ document.addEventListener('submit', (e) => {
 // ============================================================
 // BOOT
 // ============================================================
+/** Fade the pre-render splash out once the first real frame is ready. */
+function hideSplash() {
+  const el = document.getElementById('splash');
+  if (!el) return;
+  const done = () => el.remove();
+  el.classList.add('hide');
+  el.addEventListener('transitionend', done, { once: true });
+  setTimeout(done, 900);
+}
+
 async function boot() {
   try {
     const me = await api('/api/auth/me');
     state.user = me.user; state.csrf = me.csrfToken; state.email = me.email || [];
   } catch { state.user = null; }
   if (!location.hash) location.hash = '#/dashboard';
-  render();
+  await render();
+  hideSplash();
 }
 boot();

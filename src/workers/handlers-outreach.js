@@ -15,6 +15,18 @@ import { sqliteUtc } from '../core/time.js';
 export const sendKey = (missionId, leadId, kind, seq = 0) =>
   `send:${missionId}:${leadId}:${kind}:${seq}`;
 
+/**
+ * Codes that mean the provider or deliverability layer refused the send for a
+ * reason retrying cannot fix on its own (§17/§25). Each one raises the
+ * "sending paused" notification so the operator knows outreach has stopped.
+ */
+const SENDING_PAUSED_CODES = new Set([
+  'MAILBOX_AUTH_FAILED',
+  'PROVIDER_FORBIDDEN',
+  'SEND_FAILED',
+  'RATE_LIMITED_PERMANENT',
+]);
+
 /** §15/§16 — generate individualized outreach for one qualified lead. */
 export async function outreachHandler(ctx) {
   const { services, payload, job, mission } = ctx;
@@ -158,6 +170,16 @@ export async function emailHandler(ctx) {
       // Never retry a suppressed recipient.
       await leads.setStatus(lead.id, 'suppressed');
       if (conversation) await conversations.setStatus(conversation.id, 'suppressed');
+    } else if (SENDING_PAUSED_CODES.has(e.code)) {
+      // §25 — "sending paused due to provider/deliverability problem". The send
+      // is not retryable until the operator resolves it, so the operator is
+      // told immediately instead of discovering it in a failed-job list.
+      await notifications.create(job.user_id, {
+        kind: 'sending_paused', severity: 'warning',
+        title: 'Sending paused — mailbox provider problem',
+        body: `${e.message} Sending resumes once the connection is fixed and the job is retried.`,
+        missionId: mission.id,
+      });
     }
     throw e;
   }

@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS missions (
   interpreted_json     TEXT,                    -- NL -> structured settings, shown for review (Â§8)
   interpreted_reviewed INTEGER NOT NULL DEFAULT 0,
   archived_at          TEXT,
+  purged_at            TEXT,          -- retention for archived missions (§22)
   created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
 );

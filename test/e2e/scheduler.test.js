@@ -282,6 +282,82 @@ test('scheduler: editing a mission schedule changes what fires, without a manual
   assert.equal((await system.scheduler.tick(TUESDAY_1330)).length, 1);
 
   const scheduled = await db.all('SELECT stage, status FROM automation_jobs');
-  assert.ok(scheduled.some((j) => j.stage === 'discovery'), 'the new window produced real discovery work');
-  assert.ok(user.id);
+    assert.ok(scheduled.some((j) => j.stage === 'discovery'), 'the new window produced real discovery work');
+    assert.ok(user.id);
+  });
+
+test('retention: an archived mission keeps its configuration until the retention period elapses', async () => {
+  const { system, db } = await setup();
+  const { user, mission } = await withMission(system, {
+    mission: { windows: [{ dayOfWeek: 1, startMin: 600, endMin: 780 }] },
+  });
+  await system.missions.archive(mission.id, user.id);
+
+  const before = await system.missions.purgeArchived(new Date(Date.UTC(2026, 1, 9)));
+  assert.equal(before.purged, 0, 'retention has not elapsed yet');
+
+  const row = await db.get('SELECT * FROM missions WHERE id = ?', mission.id);
+  assert.ok(row.archived_at, 'the mission is still archived');
+});
+
+test('retention: an archived mission past the retention period is purged', async () => {
+  const { system, db } = await setup();
+  const { user, mission } = await withMission(system, {
+    mission: { windows: [{ dayOfWeek: 1, startMin: 600, endMin: 780 }] },
+  });
+  await system.missions.archive(mission.id, user.id);
+  await db.run("UPDATE missions SET archived_at = ? WHERE id = ?", '2020-01-01 00:00:00', mission.id);
+
+  const result = await system.missions.purgeArchived(new Date(Date.UTC(2026, 1, 9)));
+  assert.equal(result.purged, 1, 'the expired archive is purged');
+
+  const row = await db.get('SELECT * FROM missions WHERE id = ?', mission.id);
+  assert.ok(row.purged_at, 'purged_at is recorded');
+
+  const windows = await db.all('SELECT * FROM mission_windows');
+  assert.equal(
+    windows.filter((w) => w.mission_id === mission.id).length, 0,
+    'the mission windows are dropped',
+  );
+  const locations = await db.all('SELECT * FROM target_locations');
+  assert.equal(
+    locations.filter((l) => l.mission_id === mission.id).length, 0,
+    'the mission locations are dropped',
+  );
+});
+
+test('retention: discovered leads are kept after the mission is purged', async () => {
+  const { system, db } = await setup();
+  const { user, mission } = await withMission(system, {
+    mission: { windows: [{ dayOfWeek: 1, startMin: 600, endMin: 780 }] },
+  });
+  await db.run(
+    "INSERT INTO leads(id, mission_id, user_id, business_name, dedupe_key, discovery_source) VALUES (9001, ?, ?, 'Old Business', 'old-business', 'manual')",
+    mission.id, user.id,
+  );
+  await system.missions.archive(mission.id, user.id);
+  await db.run("UPDATE missions SET archived_at = ? WHERE id = ?", '2020-01-01 00:00:00', mission.id);
+
+  await system.missions.purgeArchived(new Date(Date.UTC(2026, 1, 9)));
+
+  const lead = await db.get('SELECT * FROM leads WHERE id = 9001');
+  assert.ok(lead, 'the discovered lead is retained');
+});
+
+test('retention: the scheduler tick runs the retention pass', async () => {
+  const { system, db } = await setup();
+  const { user, mission } = await withMission(system, {
+    mission: { windows: [{ dayOfWeek: 1, startMin: 600, endMin: 780 }] },
+  });
+  await system.missions.archive(mission.id, user.id);
+  await db.run("UPDATE missions SET archived_at = ? WHERE id = ?", '2020-01-01 00:00:00', mission.id);
+  await db.run(
+    'INSERT INTO mission_windows(mission_id, day_of_week, start_min, end_min) VALUES (?, ?, ?, ?)',
+    mission.id, 1, 600, 780,
+  );
+
+  await system.scheduler.tick(new Date(Date.UTC(2026, 1, 9)));
+
+  const row = await db.get('SELECT * FROM missions WHERE id = ?', mission.id);
+  assert.ok(row.purged_at, 'the expired archive was purged by the tick');
 });

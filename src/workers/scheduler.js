@@ -171,6 +171,11 @@ export class Scheduler {
     // are idempotent, so running them on every tick is safe.
     await this.scheduleFollowUps(now);
     await this.scheduleMailboxMonitors(now);
+    try {
+      await this.missions.purgeArchived();
+    } catch (e) {
+      log.warn(`archive retention failed: ${e?.message}`);
+    }
     return results;
   }
 

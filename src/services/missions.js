@@ -7,6 +7,8 @@ import { sqliteUtc, nowSqlite } from '../core/time.js';
 export const SENDING_MODES = ['scout_only', 'review_send', 'autopilot'];
 export const MISSION_STATUS = ['draft', 'scheduled', 'running', 'paused', 'stopped', 'completed', 'archived'];
 
+export const ARCHIVE_RETENTION_DAYS = 180;
+
 /** Columns a user may edit directly; structure changes go through their own methods. */
 const EDITABLE = new Set([
   'name', 'objective_raw', 'service', 'offer_summary', 'target_description',
@@ -247,6 +249,32 @@ export class MissionService {
     await this._setStatus(id, 'archived', { archived_at: nowSqlite() });
     await recordAudit(this.db, { userId, actor: 'user', action: 'mission.archived', entityType: 'mission', entityId: id });
     return this.get(id);
+  }
+
+  async purgeArchived(now = new Date(), userId = null) {
+    const cutoff = now.getTime() - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const rows = await this.db.all(
+      userId
+        ? `SELECT * FROM missions WHERE user_id = ? AND status = 'archived' ORDER BY archived_at`
+        : `SELECT * FROM missions WHERE status = 'archived' ORDER BY archived_at`,
+      ...(userId ? [userId] : [])
+    );
+    let purged = 0;
+    for (const m of rows) {
+      const archivedAt = Date.parse(m.archived_at);
+      if (!Number.isFinite(archivedAt) || archivedAt >= cutoff) continue;
+      await this.db.tx(async () => {
+        await this.db.run('DELETE FROM mission_windows WHERE mission_id = ?', m.id);
+        await this.db.run('DELETE FROM target_locations WHERE mission_id = ?', m.id);
+        await this.db.run("UPDATE missions SET purged_at = datetime('now') WHERE id = ?", m.id);
+      });
+      await recordAudit(this.db, {
+        userId: m.user_id, actor: 'system', action: 'mission.purged',
+        entityType: 'mission', entityId: m.id,
+      });
+      purged += 1;
+    }
+    return { purged };
   }
 
   async setInterpreted(id, interpreted, reviewed = false) {

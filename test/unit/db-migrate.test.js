@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createTestDb, SCHEMA_VERSION } from '../../src/db/index.js';
 
 const LIMIT_COLUMNS = ['hourly_send_limit', 'min_seconds_between_sends', 'campaign_start_at', 'campaign_end_at'];
+const RETENTION_COLUMNS = ['purged_at'];
 
 test('migrate: a legacy sqlite database is upgraded in place and marked current', async () => {
   const db = await createTestDb();
@@ -17,6 +18,7 @@ test('migrate: a legacy sqlite database is upgraded in place and marked current'
 
   const cols = (await db.all('PRAGMA table_info(missions)')).map((c) => c.name);
   for (const column of LIMIT_COLUMNS) assert.ok(cols.includes(column), `missing ${column}`);
+  for (const column of RETENTION_COLUMNS) assert.ok(cols.includes(column), `missing ${column}`);
 
   const row = await db.get("SELECT value FROM meta WHERE key = 'schema_version'");
   assert.equal(row.value, SCHEMA_VERSION);
@@ -30,4 +32,5 @@ test('migrate: a fresh sqlite database already has the limit columns', async () 
   await db.migrate();
   const cols = (await db.all('PRAGMA table_info(missions)')).map((c) => c.name);
   for (const column of LIMIT_COLUMNS) assert.ok(cols.includes(column), `missing ${column}`);
+  for (const column of RETENTION_COLUMNS) assert.ok(cols.includes(column), `missing ${column}`);
 });

@@ -42,8 +42,8 @@ Legend: **Done** = implemented and covered by tests · **Partial** = present but
 | 33 | Changing the service changes behavior (no website-specific rules) | `missions.service` enum (`api-data.test.js`) | Done |
 | 34 | Changing geography changes behavior (country filtering) | `target_locations` (`api-data.test.js`) | Done |
 | 35 | Changing schedule (multiple windows/timezone) honored by scheduler | `mission_windows`, scheduler; `scheduler.test.js` ("editing a mission schedule changes what fires, without a manual start") + timezone tests | Done |
-| 36 | UX: responsive, clear running/paused states, visible autonomous activity, pause controls, logs secondary | `public/` (redesigned, responsive) | Partial (verify phone/tablet/desktop) |
-| 37 | Navigation: Dashboard/Missions/Leads/Conversations/Email/Activity/Notifications/Settings | `public/` nav | Done |
+| 36 | UX: responsive, clear running/paused states, visible autonomous activity, pause controls, logs secondary | `public/` (redesigned, responsive), Activity view; held by `test/e2e/ux-contract.test.js` | Done (markup/CSS verified; pixel rendering at each size still needs a browser) |
+| 37 | Navigation: Dashboard/Missions/Leads/Conversations/Email/Activity/Notifications/Settings | `public/app.js` `NAV` — all eight areas are routed and rendered (`activity.test` assertions in `ux-contract.test.js`) | Done |
 | 38 | MUST NOTs: no mocks, no hard-coded provider lists, no frontend-only AI, no manual start, no niche/country hard-coding, no generic template, no guaranteed inbox placement, no invented contacts, no anti-bot bypass, no infinite sending, no follow-up after reply/opt-out, no secrets in frontend, verify real behavior | enforced across services/tests | Done |
 | 39 | Implementation order followed (foundations → … → UI → tests) | commit history matches order | Done |
 | 40 | Definition of Done: real user can autonomously scout/qualify/generate/send/monitor/notify/follow-up; recovery; dedup/suppression; OpenCode runtime | production running; e2e coverage per §32–§35 | Partial (backend gaps §17/§24 block full completion) |
@@ -58,3 +58,4 @@ Legend: **Done** = implemented and covered by tests · **Partial** = present but
 - §22 retention: `missions.purgeArchived` + scheduler pass + `purged_at` column, shipped to existing databases through `SCHEMA_VERSION` 8 and both dialect upgrade lists.
 - §31/§33/§34: confirmed covered by explicit tests rather than left as "missing".
 - §32/§3: `test/e2e/journey.test.js` now walks sign-up → mailbox → mission → auto-start scouting → send → reply → pause/resume → restart recovery in one run.
+- §36/§37: the SPA gained the missing Email and Activity screens, and `test/e2e/ux-contract.test.js` now fails if a destination, an autonomy control, a state tone, a responsive breakpoint or the "no secrets in the browser" rule regresses.

@@ -103,12 +103,14 @@ const toneOf = (s) => TONE[s] || 'faint';
 
 // ── shell ───────────────────────────────────────────────────
 const NAV = [
-  { id: 'dashboard', label: 'Command', icon: '◉' },
-  { id: 'missions', label: 'Missions', icon: '✦' },
-  { id: 'leads', label: 'Prospects', icon: '⌖' },
-  { id: 'inbox', label: 'Inbox', icon: '✉' },
-  { id: 'notifications', label: 'Signals', icon: '⚑', count: 'unread' },
-  { id: 'settings', label: 'Control', icon: '⚙' },
+  { id: 'dashboard', label: 'Command', icon: '?' },
+  { id: 'missions', label: 'Missions', icon: '?' },
+  { id: 'leads', label: 'Prospects', icon: '?' },
+  { id: 'inbox', label: 'Inbox', icon: '?' },
+  { id: 'email', label: 'Email', icon: '?' },
+  { id: 'activity', label: 'Activity', icon: '?' },
+  { id: 'notifications', label: 'Signals', icon: '?', count: 'unread' },
+  { id: 'settings', label: 'Control', icon: '?' },
 ];
 const navCounts = { unread: 0 };
 
@@ -171,6 +173,8 @@ async function renderRoute() {
     case 'missions': return r.id ? renderMissionDetail(r.id) : renderMissions();
     case 'leads': return r.id ? renderLeadDetail(r.id) : renderLeads();
     case 'inbox': return r.id ? renderConversation(r.id) : renderInbox();
+    case 'email': return renderEmail();
+    case 'activity': return renderActivity();
     case 'notifications': return renderNotifications();
     case 'settings': return renderSettings();
     default: return go('dashboard');
@@ -965,6 +969,94 @@ async function renderNotifications() {
 }
 
 // ============================================================
+// ACTIVITY  (§36 detailed activity, §37)
+// ============================================================
+async function renderActivity() {
+  const { jobs, stats, audit } = await api('/api/activity');
+  const list = jobs || [];
+  const s = stats || {};
+  setView(`
+    <div class="spread" style="margin-bottom:14px">
+      <div class="section-head" style="margin:0"><h2>Activity</h2></div>
+      <div class="row">${badge('queued', 'faint')} ${badge(`running ${num(s.running || 0)}`, 'green')} ${badge(`failed ${num(s.failed || 0)}`, (s.failed ? 'red' : 'faint'))}</div>
+    </div>
+    <div class="panel pad-lg">
+      <div class="card-label">Jobs across every mission</div>
+      ${list.length ? `<div class="table-wrap"><table class="table">
+        <thead><tr><th>Stage</th><th>Mission</th><th>State</th><th>Attempts</th><th>Updated</th><th></th></tr></thead>
+        <tbody>${list.map((j) => `<tr>
+          <td>${badge(j.stage)}</td>
+          <td>${j.mission_id ? `<button class="btn small" data-nav="missions/${j.mission_id}">#${j.mission_id}</button>` : '<span class="faint small">system</span>'}</td>
+          <td>${badge(j.status)}${j.failure ? `<div class="small muted" style="margin-top:4px">${esc(j.failure.title)}</div>` : ''}</td>
+          <td class="small">${num(j.attempts)}/${num(j.max_attempts)}</td>
+          <td class="small faint">${fmtRel(j.updated_at)}</td>
+          <td>${j.status === 'failed' ? `<button class="btn small" data-act="retry-job" data-id="${j.id}">Retry</button>` : ''}</td>
+        </tr>`).join('')}</tbody></table></div>`
+      : `<div class="empty"><div class="big">No activity yet</div><div>Jobs appear here the moment the autonomous worker starts them.</div></div>`}
+    </div>
+    ${(audit || []).length ? `<div class="panel pad-lg" style="margin-top:14px">
+      <div class="card-label">Audit trail</div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>When</th><th>Action</th><th>Entity</th><th>By</th></tr></thead>
+        <tbody>${audit.map((a) => `<tr>
+          <td class="small faint">${fmtRel(a.at)}</td>
+          <td class="small">${esc(a.action)}</td>
+          <td class="small muted">${esc(a.entity_type || '')}${a.entity_id != null ? ` #${a.entity_id}` : ''}</td>
+          <td class="small faint">${esc(a.actor || '')}</td>
+        </tr>`).join('')}</tbody></table></div></div>` : ''}`);
+}
+
+// ============================================================
+// EMAIL  (§6 mailbox, §18 reply monitoring, §37)
+// ============================================================
+async function renderEmail() {
+  const [{ providers }, { conversations }, dash] = await Promise.all([
+    api('/api/email/connections'), api('/api/conversations'), api('/api/dashboard'),
+  ]);
+  const list = providers || [];
+  const connected = list.filter((p) => p.connection?.status === 'connected');
+  const threads = conversations || [];
+  setView(`
+    <div class="spread" style="margin-bottom:14px">
+      <div class="section-head" style="margin:0"><h2>Email</h2></div>
+      <button class="btn small" data-nav="settings">Provider settings</button>
+    </div>
+    <div class="panel pad-lg">
+      <div class="card-label">Sending and monitoring</div>
+      <div class="row" style="gap:18px;margin-top:8px">
+        <div><div class="small muted">Mailboxes</div><div class="big">${num(connected.length)}</div></div>
+        <div><div class="small muted">Conversations</div><div class="big">${num(threads.length)}</div></div>
+        <div><div class="small muted">Messages sent</div><div class="big">${num(dash.messages?.sent || 0)}</div></div>
+        <div><div class="small muted">Replies received</div><div class="big">${num(dash.conversations?.replied || 0)}</div></div>
+      </div>
+      ${list.length ? `<div class="stack" style="margin-top:16px">${list.map((p) => `
+        <div class="panel">
+          <div class="spread">
+            <div><b>${esc(p.label || p.id)}</b>
+              <div class="small muted">${p.authType === 'api_key' ? 'API key' : 'Authorization redirect'}${p.capabilities?.replies ? ' · can read replies' : ''}</div></div>
+            <div class="row">${badge(p.connection?.status || 'disconnected', p.connection?.status === 'connected' ? 'green' : 'faint')}
+              ${p.connection?.status === 'connected' ? `<button class="btn small" data-act="email-disconnect" data-provider="${esc(p.id)}">Disconnect</button>` : ''}</div>
+          </div>
+          ${p.connection?.accountEmail ? `<div class="small faint" style="margin-top:8px">${esc(p.connection.accountEmail)}</div>` : ''}
+        </div>`).join('')}</div>`
+      : `<div class="empty"><div class="big">No mailbox connected</div><div>Nexora sends through your own account. Connect one to let the autopilot reach prospects.</div>
+          <div style="margin-top:14px"><button class="btn" data-nav="settings">Connect a mailbox</button></div></div>`}
+    </div>
+    <div class="panel pad-lg" style="margin-top:14px">
+      <div class="card-label">Reply monitoring</div>
+      <div class="small muted" style="margin-top:6px">Connected mailboxes are polled every 15 minutes; a reply stops the follow-up sequence immediately.</div>
+      <div class="stack" style="margin-top:12px">
+        ${threads.length ? threads.slice(0, 10).map((c) => `
+          <div class="panel row-click" data-nav="inbox/${c.id}">
+            <div class="spread"><b>Thread #${c.id}</b>${badge(c.status)}</div>
+            <div class="small faint" style="margin-top:6px">${num(c.reply_count)} repl${c.reply_count === 1 ? 'y' : 'ies'} · updated ${fmtRel(c.updated_at || c.created_at)}</div>
+          </div>`).join('')
+        : '<div class="faint small">No conversations yet.</div>'}
+      </div>
+    </div>`);
+}
+
+// ============================================================
 // SETTINGS
 // ============================================================
 /**
@@ -1259,7 +1351,7 @@ async function runAction(act, el) {
       case 'email-disconnect': {
         if (!confirm('Disconnect this mailbox? Outreach will stop sending.')) return;
         await api(`/api/email/${el.dataset.provider}/disconnect`, { method: 'POST', body: {} });
-        toast('Mailbox disconnected', 'ok'); renderSettings(); return;
+        toast('Mailbox disconnected', 'ok'); render(); return;
       }
       default: return;
     }

@@ -200,6 +200,24 @@ export function makeFakeEmail(db = null) {
   email.connect = (userId, provider, accountEmail) => {
     db_connections.set(`${userId}:${provider}`, { accountEmail });
   };
+  /**
+   * The real EmailService writes the connection to the database, and the rest
+   * of the system (sending, monitoring, the connections view) reads it from
+   * there. Tests that connect through the real routes must therefore persist
+   * too, or the pipeline would believe the mailbox is still unconnected.
+   */
+  const persistConnection = async (userId, provider, accountEmail) => {
+    email.connect(userId, provider, accountEmail);
+    if (!db) return;
+    await db.run(
+      `INSERT INTO email_connections(user_id, provider, account_email, access_token_enc, status, updated_at)
+       VALUES(?,?,?, 'v1:a:b:c', 'connected', datetime('now'))
+       ON CONFLICT(user_id, provider) DO UPDATE SET account_email = excluded.account_email,
+                                                   status = 'connected',
+                                                   updated_at = excluded.updated_at`,
+      userId, provider, accountEmail,
+    );
+  };
   // â”€â”€ OAuth, so the connect/callback route pair is exercised for real â”€â”€
   email.beginAuth = async (userId, providerId) => {
     if (!['google', 'microsoft'].includes(providerId)) {
@@ -225,7 +243,7 @@ export function makeFakeEmail(db = null) {
     if (code === 'bad-code') {
       throw err.email('MAILBOX_AUTH_FAILED', 'The provider rejected the authorization code.');
     }
-    email.connect(userId, providerId, `${providerId}@example.com`);
+    await persistConnection(userId, providerId, `${providerId}@example.com`);
     return { provider: providerId, status: 'connected', accountEmail: `${providerId}@example.com` };
   };
   // ── API-key providers (Resend), mirroring EmailService.connectApiKey ──
@@ -240,7 +258,7 @@ export function makeFakeEmail(db = null) {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(fromEmail || '').trim())) {
       throw err.validation('Enter a valid From email address.');
     }
-    email.connect(userId, 'resend', String(fromEmail).trim());
+    await persistConnection(userId, 'resend', String(fromEmail).trim());
     return { provider: 'resend', status: 'connected', accountEmail: String(fromEmail).trim(), senderReady: true, domains: [] };
   };
   email.replyCapable = async (_userId, providerId = null) =>

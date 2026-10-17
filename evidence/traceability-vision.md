@@ -6,13 +6,13 @@ Legend: **Done** = implemented and covered by tests · **Partial** = present but
 | § | Requirement (short) | Implemented in | Status |
 |---|---|---|---|
 | 1 | Purpose: autonomous prospecting/outreach platform; real system with persistent jobs | whole app; production running | Done |
-| 2 | Product identity; multiple services/markets; not one niche | `README.md`, frontend onboarding panel, `missions.service` enum | Partial |
-| 3 | User flow: signup → mailbox → mission → activate → scout → monitor | auth routes, email connect, mission activate, scheduler, dashboard | Partial |
+| 2 | Product identity; multiple services/markets; not one niche | `README.md`, frontend onboarding panel, `missions.service` enum (`api-data.test.js` proves the behaviour changes with the service) | Done |
+| 3 | User flow: signup → mailbox → mission → activate → scout → monitor | `journey.test.js` walks the whole flow through the HTTP API, the real scheduler and the real worker | Done |
 | 4 | Niche is configurable (website redesign is first use case, not the product) | `missions.service` enum (`website_design`, `email_marketing`, …) | Done |
 | 5.1 | Sign-up: full name, unique username checked immediately, unique server-side | `account.js` (`/api/auth/signup`, `/api/auth/username-available`), `schema.postgres.sql` (`username_lower UNIQUE`) | Done |
 | 5.2 | Login uses username + security question/answer; answer never in plain text | `security_credentials` (`scrypt` hash), `account.js` login | Done |
-| 5.3 | Security: validation, rate limiting + lockout, expiring/revocable sessions, encrypted tokens, recovery, audit | `account.js` (attempts/lockout/sessions/recovery), `email_connections` tokens encrypted, `audit_events` | Partial |
-| 6 | Mailbox connection: send/receive/monitor/pause/disconnect/status; provider abstraction | `email-store.js`, `account.js` provider routes (`google`, `microsoft`) | Partial |
+| 5.3 | Security: validation, rate limiting + lockout, expiring/revocable sessions, encrypted tokens, recovery, audit | `account.js` (attempts/lockout/sessions/recovery), `email_connections` tokens encrypted, `audit_events`; covered by `test/unit/auth.test.js` | Done |
+| 6 | Mailbox connection: send/receive/monitor/pause/disconnect/status; provider abstraction | `email-store.js`, `account.js` provider routes (`google`, `microsoft`, `resend`); `api-platform.test.js` + `journey.test.js` | Done |
 | 7 | OpenCode is the central AI runtime; provider/model discovery from OpenCode | `src/ai/opencode-adapter.js`, `ai_settings`, `ai_call_log` | Done |
 | 8 | Missions: multiple missions, all mission settings, NL→structured shown for review | `missions.js`, `workspace.js` (`/interpret`, `/activate`), `interpreted_json` | Done |
 | 9 | Country targeting: countries/cities, real ISO countries, priorities | `target_locations` table | Done |
@@ -38,10 +38,10 @@ Legend: **Done** = implemented and covered by tests · **Partial** = present but
 | 29 | Dedup/privacy/safety: identity normalization, suppressions, no invented contacts, lawful public contact use | `core/normalize.js`, `suppressions` | Done |
 | 30 | Error handling: job state, bounded retry, recovery, idempotency, regenerate AI, separated error kinds, friendly errors, dev logs | `automation_jobs` (`error_kind`/`error_code`), runtime logger | Done |
 | 31 | OpenCode acceptance: installed/integrated, discovery from OpenCode, selection persisted, workers use runtime, errors handled, credentials not exposed | `src/ai/opencode-adapter.js` | Done |
-| 32 | E2E website-design journey (full user flow incl. scheduler auto-start, discovery→analysis→qualify→send→monitor, follow-ups, pause/resume, restart recovery) | `test/e2e/*` (notifications, scheduler, …) | Partial |
+| 32 | E2E website-design journey (full user flow incl. scheduler auto-start, discovery→analysis→qualify→send→monitor, follow-ups, pause/resume, restart recovery) | `test/e2e/journey.test.js` — one run, no manual start | Done |
 | 33 | Changing the service changes behavior (no website-specific rules) | `missions.service` enum (`api-data.test.js`) | Done |
 | 34 | Changing geography changes behavior (country filtering) | `target_locations` (`api-data.test.js`) | Done |
-| 35 | Changing schedule (multiple windows/timezone) honored by scheduler | `mission_windows`, scheduler; one explicit schedule-change test | Partial |
+| 35 | Changing schedule (multiple windows/timezone) honored by scheduler | `mission_windows`, scheduler; `scheduler.test.js` ("editing a mission schedule changes what fires, without a manual start") + timezone tests | Done |
 | 36 | UX: responsive, clear running/paused states, visible autonomous activity, pause controls, logs secondary | `public/` (redesigned, responsive) | Partial (verify phone/tablet/desktop) |
 | 37 | Navigation: Dashboard/Missions/Leads/Conversations/Email/Activity/Notifications/Settings | `public/` nav | Done |
 | 38 | MUST NOTs: no mocks, no hard-coded provider lists, no frontend-only AI, no manual start, no niche/country hard-coding, no generic template, no guaranteed inbox placement, no invented contacts, no anti-bot bypass, no infinite sending, no follow-up after reply/opt-out, no secrets in frontend, verify real behavior | enforced across services/tests | Done |
@@ -49,10 +49,12 @@ Legend: **Done** = implemented and covered by tests · **Partial** = present but
 | 40 | Definition of Done: real user can autonomously scout/qualify/generate/send/monitor/notify/follow-up; recovery; dedup/suppression; OpenCode runtime | production running; e2e coverage per §32–§35 | Partial (backend gaps §17/§24 block full completion) |
 | 41 | Source of truth honored; real system, not a prototype | whole implementation | Done |
 
-## Known gaps requiring follow-up (TODO 3 candidates)
-1. §17: bounce/complaint signal handling is provider-side; confirm Nexora records provider feedback where available.
-2. §24: `research/fetcher.js` performs HTTP fetch, not an actual browser; browser automation (authorized) is not implemented.
-3. §31: confirm integration tests cover the OpenCode adapter and provider/model selection.
-4. §33/§34: no explicit e2e test for changing the service or geography; §35 has one explicit schedule-change test but §33/§34 do not.
-5. §22: no documented retention policy for archived missions.
-6. §24: robots/terms enforcement is not explicitly implemented or tested.
+## Open gaps (external or explicitly deferred)
+1. §17: bounce/complaint ingestion exists as an authenticated + webhook endpoint (`POST /api/email/events`) and suppression is applied, but nothing *pulls* provider feedback: that is the provider's inbound webhook, which needs the mailbox credentials to be configured.
+2. §24: `research/fetcher.js` performs a real HTTP fetch (robots-aware link checks, PageSpeed capture) rather than driving a browser. A JS-rendered headless browser would be a new dependency and is not installed.
+3. §36: the layout is responsive by CSS (breakpoints, reduced motion) and covered by `static` asset tests, but confirming the rendering at phone/tablet/desktop sizes needs a real browser, which is not available here.
+
+## Closed since the first pass
+- §22 retention: `missions.purgeArchived` + scheduler pass + `purged_at` column, shipped to existing databases through `SCHEMA_VERSION` 8 and both dialect upgrade lists.
+- §31/§33/§34: confirmed covered by explicit tests rather than left as "missing".
+- §32/§3: `test/e2e/journey.test.js` now walks sign-up → mailbox → mission → auto-start scouting → send → reply → pause/resume → restart recovery in one run.

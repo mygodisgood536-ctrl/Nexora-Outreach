@@ -207,6 +207,33 @@ input:focus, textarea:focus, select:focus {
 }
 textarea { resize: vertical; min-height: 84px; line-height: 1.55; }
 select option { background: var(--panel-solid); color: var(--text); }
+/* Native select arrows are light-mode widgets; on this dark canvas they read as
+   a stray grey box. Draw the chevron so every control matches the rest. */
+select {
+  appearance: none; -webkit-appearance: none; padding-right: 38px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b0bcd0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; background-size: 15px;
+}
+input[type="checkbox"], input[type="radio"] {
+  appearance: none; -webkit-appearance: none;
+  width: 17px; height: 17px; padding: 0; border-radius: 5px;
+  border: 1px solid var(--line-strong); background: rgb(11 16 32 / 0.85);
+  display: inline-grid; place-content: center; cursor: pointer; vertical-align: -3px;
+}
+input[type="radio"] { border-radius: 50%; }
+input[type="checkbox"]:checked, input[type="radio"]:checked {
+  border-color: var(--accent); background: var(--accent);
+}
+input[type="checkbox"]:checked::after {
+  content: ""; width: 9px; height: 5px; margin-top: -2px;
+  border: 2px solid var(--accent-ink); border-top: 0; border-right: 0; transform: rotate(-45deg);
+}
+input[type="radio"]:checked::after {
+  content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-ink);
+}
+input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible {
+  box-shadow: 0 0 0 3px rgb(124 156 255 / 0.25); outline: none;
+}
 
 .row-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .row-fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -301,7 +328,7 @@ select option { background: var(--panel-solid); color: var(--text); }
 .brand { display: flex; align-items: center; gap: 12px; padding: 4px 6px 18px; border-bottom: 1px solid var(--line); }
 .brand img { width: 38px; height: 38px; border-radius: 11px; }
 .brand .name { font-family: var(--display); font-size: 19px; line-height: 1.1; letter-spacing: -0.01em; }
-.brand .sub { font-family: var(--mono); font-size: 10px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--faint); }
+.brand .sub { font-family: var(--mono); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
 
 .nav { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
 .nav a {
@@ -314,7 +341,10 @@ select option { background: var(--panel-solid); color: var(--text); }
   background: rgb(124 156 255 / 0.14); color: var(--text);
   border-color: rgb(124 156 255 / 0.28);
 }
-.nav a .ico { width: 20px; text-align: center; color: var(--accent-bright); font-size: 15px; }
+.nav a .ico { width: 20px; display: inline-flex; color: var(--accent-bright); }
+.nav a .ico svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.nav a.active .ico svg { stroke-width: 1.9; }
+.nav a:hover .ico svg { stroke-width: 1.9; }
 .nav a .count {
   margin-left: auto; min-width: 20px; text-align: center;
   font: 600 11px var(--mono); padding: 1px 6px; border-radius: var(--radius-pill);
@@ -337,7 +367,7 @@ select option { background: var(--panel-solid); color: var(--text); }
   border-bottom: 1px solid var(--line);
 }
 .topbar .title { font-family: var(--display); font-size: 20px; line-height: 1.15; }
-.topbar .sub { font-family: var(--mono); font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--faint); }
+.topbar .sub { font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
 
 .view { padding: 26px; max-width: 1240px; width: 100%; }
 
@@ -472,4 +502,74 @@ kbd { font: 500 11px var(--mono); background: rgb(124 156 255 / 0.14); border: 1
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
+
+/* ── Filters, stat values, attention rows ───────────────────────────────── */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 13px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: rgb(16 23 40 / 0.45);
+  color: var(--muted); font: 500 13px var(--sans);
+  transition: border-color .15s ease, color .15s ease, background .15s ease;
+}
+.chip:hover { border-color: var(--line-strong); color: var(--text); }
+.chip.on { border-color: rgb(124 156 255 / 0.45); background: rgb(124 156 255 / 0.12); color: var(--text); }
+.chip .chip-n {
+  font: 600 11px var(--mono); color: var(--accent-bright);
+  padding: 1px 7px; border-radius: 999px; background: rgb(124 156 255 / 0.14);
+}
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Numerals: the display face with tabular figures reads far better than the
+   mono face, whose slashed zero looks like a typo at large sizes. */
+.stat-value {
+  font: 600 30px/1.1 var(--display); letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums; margin: 8px 0 3px; color: var(--text);
+}
+.stat-value.sm { font-size: 22px; margin: 4px 0 0; }
+
+.attention-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 11px 0; border-bottom: 1px dashed var(--line);
+}
+.attention-row:last-child { border-bottom: 0; }
+/* Buttons default to nowrap; inside a two-column panel a long mission name
+   used to push the row past the card edge and overflow the page. */
+.attention-row > * { min-width: 0; }
+.attention-row .btn { white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.attention-row > .small { flex: 0 0 auto; }
+
+.pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.pipeline-cell { border-left: 1px solid var(--line); padding-left: 14px; }
+.pipeline-cell:first-child { border-left: 0; padding-left: 0; }
+
+/* Inbox rows: the business is the anchor, the preview carries the detail. */
+.thread-row { display: flex; align-items: center; gap: 16px; }
+.thread-main { min-width: 0; flex: 1; }
+.thread-side { flex: 0 0 auto; }
+.thread-preview {
+  margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.teal { color: var(--green); }
+.plain-list { margin: 6px 0 0; padding-left: 18px; }
+.plain-list li { font-size: 13.5px; color: var(--muted); margin-bottom: 4px; }
+.bubble-in { border-color: rgb(95 214 196 / 0.3); background: rgb(95 214 196 / 0.05); }
+@media (max-width: 980px) {
+  /* Two dashboard panels side by side get too narrow for a mission name. */
+  .attention-row { flex-wrap: wrap; }
+  .attention-row .btn { flex: 1 1 auto; }
+}
+
+@media (max-width: 760px) {
+  .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 18px; }
+  .thread-row { align-items: flex-start; }
+  /* Eight full-width stat cards pushed everything actionable off-screen. Two
+     compact columns keep the numbers scannable without the endless scroll. */
+  .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .grid.cols-4 > .panel { padding: 12px 13px; }
+  .grid.cols-4 .stat-value { font-size: 21px; margin: 4px 0 2px; }
+  /* Tighten the tracking rather than the size: 10px eyebrow text is unreadable. */
+  .grid.cols-4 .card-label { letter-spacing: 0.08em; }
+  .attention-row { flex-wrap: wrap; gap: 8px; }
 }

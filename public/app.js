@@ -36,6 +36,36 @@ const titleCase = (s) => String(s || '').replace(/[_-]+/g, ' ').replace(/\b\w/g,
 const num = (n) => Number(n || 0).toLocaleString();
 const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const dayName = (d) => DAY[Number(d)] || String(d);
+/** Windows are stored as minutes after midnight; people read "10:00". */
+const minutesToTime = (m) => {
+  const n = Number(m);
+  if (!Number.isFinite(n)) return String(m ?? '');
+  const h = Math.floor(((n % 1440) + 1440) % 1440 / 60);
+  const mm = ((n % 60) + 60) % 60;
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+};
+/** Stage ids are machine names; the reader sees a sentence. */
+const STAGE_LABELS = {
+  discovery: 'Discovery', research: 'Research', site_analysis: 'Website analysis',
+  presence_analysis: 'Presence check', qualification: 'Qualification', outreach: 'Outreach drafting',
+  email: 'Sending', follow_up: 'Follow-up', mailbox_monitor: 'Reply monitoring',
+  approval: 'Awaiting approval', retention: 'Housekeeping',
+};
+const stageLabel = (s) => STAGE_LABELS[s] || titleCase(s || 'work');
+/**
+ * A raw failure string ("REQUEST TO X FAILED: FETCH FAILED") is noise. The
+ * operator needs the cause in a sentence, so the noisy part is dropped.
+ */
+const plainFailure = (text) => {
+  const s = String(text || '').trim();
+  if (!s) return '';
+  const cleaned = s
+    .replace(/^request to .*? failed[:\s]*/i, 'The site could not be reached — ')
+    .replace(/\bfetch failed\b/gi, 'the connection failed')
+    .replace(/\bgetaddrinfo [a-z0-9_ -]+\b/gi, 'the address could not be resolved')
+    .replace(/^([a-z])/, (c) => c.toUpperCase());
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+};
 
 function toast(message, kind = 'ok', title = null) {
   const div = document.createElement('div');
@@ -102,17 +132,42 @@ const badge = (text, tone) => `<span class="badge ${tone || TONE[text] || 'faint
 const toneOf = (s) => TONE[s] || 'faint';
 
 // ── shell ───────────────────────────────────────────────────
+// Icons are inline SVG rather than unicode glyphs: a dingbat only renders on
+// the fonts that ship that exact codepoint, so a missing glyph silently
+// degrades the whole navigation into a column of "?" boxes.
+const ICONS = {
+  dashboard: '<path d="M3 3h7v7H3zM14 3h7v4h-7zM14 10h7v11h-7zM3 13h7v8H3z"/>',
+  missions: '<path d="M12 2.5l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 16.4 6.4 19.6l1.4-6.3L3 9l6.4-.6z"/>',
+  leads: '<path d="M12 21s7-5.3 7-11a7 7 0 10-14 0c0 5.7 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/>',
+  inbox: '<path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M3 13l2.6-7.4A2 2 0 017.5 4.5h9a2 2 0 011.9 1.4L21 13v5.5a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
+  email: '<path d="M3 7.5l9 6 9-6"/><rect x="3" y="4.5" width="18" height="15" rx="2.5"/>',
+  activity: '<path d="M3 12h4l2.5-7 4 14 2.5-7h5"/>',
+  notifications: '<path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 19a2 2 0 004 0"/>',
+  settings: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v3M12 18.2v3M21.2 12h-3M5.8 12h-3M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1M18.5 18.5l-2.1-2.1M7.6 7.6L5.5 5.5"/>',
+};
+const icon = (id) => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICONS[id] || ''}</svg>`;
+
 const NAV = [
-  { id: 'dashboard', label: 'Command', icon: '?' },
-  { id: 'missions', label: 'Missions', icon: '?' },
-  { id: 'leads', label: 'Prospects', icon: '?' },
-  { id: 'inbox', label: 'Inbox', icon: '?' },
-  { id: 'email', label: 'Email', icon: '?' },
-  { id: 'activity', label: 'Activity', icon: '?' },
-  { id: 'notifications', label: 'Signals', icon: '?', count: 'unread' },
-  { id: 'settings', label: 'Control', icon: '?' },
+  { id: 'dashboard', label: 'Command', icon: 'dashboard' },
+  { id: 'missions', label: 'Missions', icon: 'missions' },
+  { id: 'leads', label: 'Prospects', icon: 'leads' },
+  { id: 'inbox', label: 'Inbox', icon: 'inbox' },
+  { id: 'email', label: 'Email', icon: 'email' },
+  { id: 'activity', label: 'Activity', icon: 'activity' },
+  { id: 'notifications', label: 'Signals', icon: 'notifications', count: 'unread' },
+  { id: 'settings', label: 'Control', icon: 'settings' },
 ];
 const navCounts = { unread: 0 };
+
+/**
+ * The page title must be the same word the navigation uses. Deriving it from
+ * the route id instead left every screen called something different from its
+ * own menu entry (Leads/Prospects, Signals/Notifications, Command/Dashboard).
+ */
+const navLabel = (path) => {
+  const id = String(path || '').split('/')[0];
+  return (NAV.find((n) => n.id === id) || {}).label || titleCase(id);
+};
 
 function shell(inner) {
   const r = route();
@@ -127,7 +182,7 @@ function shell(inner) {
       <nav class="nav">
         ${NAV.map((n) => `
           <a href="#/${n.id}" class="${r.path === n.id ? 'active' : ''}">
-            <span class="ico">${n.icon}</span>${n.label}
+            <span class="ico">${icon(n.icon)}</span>${n.label}
             ${n.count && navCounts[n.count] ? `<span class="count">${navCounts[n.count]}</span>` : ''}
           </a>`).join('')}
       </nav>
@@ -141,7 +196,7 @@ function shell(inner) {
       <header class="topbar">
         <button class="btn hamburger" data-act="open-nav">☰</button>
         <div>
-          <div class="title">${titleCase(r.path)}</div>
+          <div class="title">${esc(navLabel(r.path))}</div>
           <div class="sub">Autonomous prospecting console</div>
         </div>
         <div class="grow"></div>
@@ -159,6 +214,9 @@ const loadingView = () => `<div class="empty"><div class="big">Establishing link
 async function render() {
   if (!state.user) return renderAuth();
   app.innerHTML = shell(loadingView());
+  // The shell is painted, so the splash has done its job. Data streams in
+  // behind it from here; the screen must never be blocked by a slow API.
+  hideSplash();
   try {
     await renderRoute();
   } catch (e) {
@@ -334,55 +392,64 @@ async function renderDashboard() {
   const [dash, notifs] = await Promise.all([api('/api/dashboard'), api('/api/notifications?limit=1')]);
   navCounts.unread = notifs.unread || 0;
 
-  const stat = (label, value, sub) => `<div class="panel"><div class="card-label">${label}</div><div style="font:700 30px var(--mono);margin:8px 0 2px">${num(value)}</div><div class="faint small">${sub || ''}</div></div>`;
-  const attention = dash.attention || [];
+  const stat = (label, value, sub) => `<div class="panel"><div class="card-label">${label}</div><div class="stat-value">${num(value)}</div><div class="faint small">${sub || ''}</div></div>`;
+  // §20 names this list "items requiring attention"; the API returns it under
+  // that exact key. Reading the wrong one silently showed "nothing to do" even
+  // while jobs were failing.
+  const attention = dash.itemsRequiringAttention || [];
   const attentionText = {
-    mailbox_not_connected: ['Connect a mailbox', 'settings'],
-    automation_paused: ['Automation is paused — resume in Control', 'settings'],
-    critical_notifications: ['Critical signals need review', 'notifications'],
-    failed_jobs: ['Some jobs failed and need a retry', 'dashboard'],
-    follow_ups_due: ['Follow-ups are due', 'inbox'],
+    mailbox_not_connected: ['Connect a mailbox so outreach can be sent', 'settings', 'Connect mailbox'],
+    automation_paused: ['Automation is paused — nothing will run until you resume', 'settings', 'Resume'],
+    critical_notifications: ['Signals marked critical are waiting for you', 'notifications', 'Review'],
+    failed_jobs: ['Jobs stopped and will not retry on their own', 'activity', 'Open activity'],
+    follow_ups_due: ['Follow-ups are due and will go out on the next window', 'inbox', 'Open inbox'],
   };
 
   setView(`
     ${onboardingPanel(dash, attention)}
-    <div class="grid cols-4" style="margin-bottom:18px">
-      ${stat('Missions', dash.missions.total, `${num(dash.missions.active)} active`)}
-      ${stat('Prospects', dash.leads.discovered, `${num(dash.leads.qualified)} qualified`)}
-      ${stat('Messages', dash.messages.generated, `${num(dash.messages.sent)} sent`)}
-      ${stat('Replies', dash.conversations.replied, 'conversations')}
+    <div class="grid cols-4" style="margin-bottom:16px">
+      ${stat('Missions', dash.missions.total, `${num(dash.missions.active)} running on a schedule`)}
+      ${stat('Prospects', dash.leads.discovered, `${num(dash.leads.sent)} contacted so far`)}
+      ${stat('Messages sent', dash.messages.sent, `${num(dash.messages.generated)} written in total`)}
+      ${stat('Replies', dash.conversations.replied, 'from businesses you wrote to')}
     </div>
 
-    <div class="grid cols-3" style="margin-bottom:18px">
-      ${stat('Websites analysed', dash.websitesAnalyzed, '')}
-      ${stat('Follow-ups due', dash.conversations.followUpsDue, `${num(dash.conversations.followUpPending)} pending`)}
-      ${stat('Unread signals', notifs.unread, '')}
+    <div class="grid cols-4" style="margin-bottom:16px">
+      ${stat('Websites analysed', dash.websitesAnalyzed, 'public pages read')}
+      ${stat('Follow-ups scheduled', dash.conversations.followUpPending, `${num(dash.conversations.followUpsDue)} due now`)}
+      ${stat('Unread signals', notifs.unread, 'in your signals feed')}
+      ${stat('Jobs running', dash.jobs.running || 0, `${num(dash.jobs.queued || 0)} waiting`)}
     </div>
 
-    <div class="grid cols-2" style="margin-bottom:18px">
-      <div class="panel">
-        <div class="section-head"><h2>Needs attention</h2></div>
+    <div class="grid cols-2" style="margin-bottom:16px">
+      <div class="panel pad-lg">
+        <div class="section-head"><h2>Needs attention</h2>
+          ${attention.length ? `<span class="badge ${attention.some((a) => a.kind === 'failed_jobs' || a.kind === 'mailbox_not_connected') ? 'red' : 'amber'}">${attention.length}</span>` : ''}
+        </div>
         ${attention.length ? attention.map((a) => {
-          const [text, link] = attentionText[a.kind] || [titleCase(a.kind), 'dashboard'];
-          return `<div class="row spread" style="padding:8px 0;border-bottom:1px dashed var(--line)">
-            <span>${esc(text)}</span>
-            <button class="btn small" data-nav="${link}">${num(a.count)} →</button></div>`;
+          const [text, link, cta] = attentionText[a.kind] || [titleCase(a.kind), 'dashboard', 'Open'];
+          return `<div class="attention-row">
+            <div><div class="small">${esc(text)}</div>
+              ${a.count > 1 ? `<div class="faint small">${num(a.count)} in total</div>` : ''}</div>
+            <button class="btn small" data-nav="${link}">${esc(cta)}</button>
+          </div>`;
         }).join('') : '<div class="faint small">Nothing needs you right now. The fleet is cruising.</div>'}
       </div>
-      <div class="panel">
+      <div class="panel pad-lg">
         <div class="section-head"><h2>Next scouting</h2></div>
-        ${(dash.nextScouting || []).length ? dash.nextScouting.map((m) => `<div class="row spread" style="padding:8px 0;border-bottom:1px dashed var(--line)">
+        ${(dash.nextScouting || []).length ? dash.nextScouting.map((m) => `<div class="attention-row">
           <button class="btn small" data-nav="missions">${esc(m.name)}</button>
-          <span class="mono small faint">${fmtRel(m.nextRunAt)}</span></div>`).join('') : '<div class="faint small">No active missions scheduled.</div>'}
+          <span class="small faint">${fmtRel(m.nextRunAt)}</span></div>`).join('') : '<div class="faint small">No active missions scheduled.</div>'}
       </div>
     </div>
 
-    <div class="panel">
-      <div class="section-head"><h2>Job pipeline</h2></div>
-      <div class="row" style="gap:22px">
-        ${['queued', 'running', 'succeeded', 'failed'].map((k) => `<div>
+    <div class="panel pad-lg">
+      <div class="section-head"><h2>Job pipeline</h2>
+        <span class="small faint">every stage the autonomous worker runs</span></div>
+      <div class="pipeline">
+        ${['queued', 'running', 'succeeded', 'failed'].map((k) => `<div class="pipeline-cell">
           <div class="card-label">${k}</div>
-          <div class="mono" style="font-size:20px">${num(dash.jobs[k] || 0)}</div></div>`).join('')}
+          <div class="stat-value sm">${num(dash.jobs[k] || 0)}</div></div>`).join('')}
       </div>
     </div>`);
 }
@@ -390,6 +457,19 @@ async function renderDashboard() {
 // ============================================================
 // MISSIONS
 // ============================================================
+/** Machine values never reach the reader: `review_send` is not a sentence. */
+const SENDING_MODES = {
+  scout_only: 'Scout only', review_send: 'Review & Send', autopilot: 'Autopilot',
+};
+const sendingModeLabel = (mode) => SENDING_MODES[mode] || titleCase(mode || 'not set');
+
+const targetSummary = (locations) => {
+  const list = (locations || []).map((l) => [l.city, l.country].filter(Boolean).join(', ')).filter(Boolean);
+  if (!list.length) return 'No locations set';
+  if (list.length <= 2) return `Targeting ${list.join(' and ')}`;
+  return `Targeting ${list.slice(0, 2).join(', ')} and ${list.length - 2} more`;
+};
+
 async function renderMissions() {
   const { missions } = await api('/api/missions?includeArchived=1');
   const list = missions || [];
@@ -402,12 +482,15 @@ async function renderMissions() {
       <div class="panel">
         <div class="spread">
           <div><div style="font-weight:700;font-size:16px">${esc(m.name)}</div>
-            <div class="faint small" style="margin-top:3px">${esc(titleCase(m.service || ''))} · ${esc(m.sendingMode || '')}</div></div>
+            <div class="faint small" style="margin-top:3px">${esc(titleCase(m.service || ''))} &middot; ${esc(sendingModeLabel(m.sendingMode))}</div></div>
           ${badge(m.status)}
         </div>
         <div class="row" style="gap:14px;margin-top:12px">
-          <span class="small muted">${m.locations?.length || 0} target${(m.locations?.length || 0) === 1 ? '' : 's'}</span>
-          <span class="small muted">Next: ${esc(m.nextRunAt ? fmtRel(m.nextRunAt) : '—')}</span>
+          <span class="small muted">${esc(targetSummary(m.locations))}</span>
+        </div>
+        <div class="row" style="gap:14px;margin-top:6px">
+          <span class="small faint">${['scheduled', 'running'].includes(m.status)
+    ? `Next run ${esc(fmtRel(m.nextRunAt))}` : 'Not on a schedule yet'}</span>
         </div>
         <div class="row" style="margin-top:12px">
           <button class="btn small" data-nav="missions/${m.id}">Open</button>
@@ -433,7 +516,7 @@ async function renderMissionDetail(id) {
     </div>
     <div class="panel pad-lg" style="margin-bottom:16px">
       <h2 class="display-md">${esc(m.name)}</h2>
-      <div class="faint small" style="margin-top:4px">${esc(titleCase(m.service || ''))} · ${esc(titleCase(m.sendingMode || ''))} · ${esc(m.timezone || 'UTC')}</div>
+      <div class="faint small" style="margin-top:4px">${esc(titleCase(m.service || ''))} · ${esc(sendingModeLabel(m.sendingMode))} · ${esc(m.timezone || 'UTC')}</div>
       <div class="row" style="gap:10px;margin-top:16px">
         <button class="btn primary" data-act="edit-mission" data-id="${id}">Edit mission</button>
         ${actions.map(([a, l]) => `<button class="btn" data-act="mission-action" data-id="${id}" data-action="${a}">${l}</button>`).join('')}
@@ -450,7 +533,7 @@ async function renderMissionDetail(id) {
       <div class="panel">
         <div class="section-head"><h2>Windows</h2></div>
         ${(m.windows || []).length ? m.windows.map((w) => `<div class="row spread" style="padding:6px 0;border-bottom:1px dashed var(--line)">
-          <span>${esc(dayName(w.dayOfWeek))}</span><span class="mono small">${esc(w.startMin)}–${esc(w.endMin)}</span></div>`).join('') : '<div class="faint small">No windows.</div>'}
+          <span>${esc(dayName(w.dayOfWeek))}</span><span class="mono small">${esc(minutesToTime(w.startMin))}–${esc(minutesToTime(w.endMin))}</span></div>`).join('') : '<div class="faint small">No windows.</div>'}
       </div>
     </div>
 
@@ -494,8 +577,8 @@ async function renderMissionDetail(id) {
               ? `<button class="btn small" data-act="retry-job" data-id="${j.id}">Retry</button>`
               : '<span class="faint small">not retryable</span>')
             : '';
-          return `<tr><td class="mono small">${esc(j.stage || j.kind || '')}</td>
-          <td>${badge(j.status)}${j.error_kind ? ` <span class="faint small">${esc(j.error_kind)}</span>` : ''}</td>
+          return `<tr><td class="small">${esc(stageLabel(j.stage || j.kind || ''))}</td>
+          <td>${badge(j.status)}</td>
           <td class="small muted">${fmtRel(j.finished_at || j.created_at || j.enqueued_at)}</td>
           <td class="small faint">${detail}</td>
           <td>${action}</td></tr>`;
@@ -703,17 +786,17 @@ async function renderLeadDetail(id) {
         ${l.phonePublic ? `<a class="btn small" href="tel:${esc(l.phonePublic)}">${esc(l.phonePublic)}</a>` : ''}
       </div>
       ${suppression.suppressed ? `<div class="badge red" style="margin-top:12px">Suppressed · ${esc(suppression.scope || '')} · ${esc(suppression.reason || '')}</div>` : ''}
-      ${l.stageError ? `<div class="badge red" style="margin-top:12px">Last error: ${esc(String(l.stageError).slice(0, 200))}</div>` : ''}
+      ${l.stageError ? `<div class="badge red" style="margin-top:12px">Last error: ${esc(plainFailure(String(l.stageError).slice(0, 200)))}</div>` : ''}
     </div>
 
     <div class="grid cols-2" style="margin-bottom:16px">
       <div class="panel">
         <div class="section-head"><h2>Website analysis</h2></div>
         ${data.websiteAnalysis ? `<div class="row" style="gap:18px;margin-bottom:10px">
-          <div><div class="card-label">Quality</div><div class="mono" style="font-size:22px">${esc(data.websiteAnalysis.score ?? '—')}</div></div>
-          <div><div class="card-label">Status</div><div class="mono" style="font-size:22px">${data.websiteAnalysis.ok ? 'ok' : 'failed'}</div></div>
+          <div><div class="card-label">Quality</div><div class="stat-value sm">${data.websiteAnalysis.score != null ? num(data.websiteAnalysis.score) : '—'}</div></div>
+          <div><div class="card-label">Status</div><div class="stat-value sm">${data.websiteAnalysis.ok ? 'Read' : 'Failed'}</div></div>
         </div>
-        ${data.websiteAnalysis.error ? `<div class="badge red" style="margin-bottom:8px">${esc(String(data.websiteAnalysis.error).slice(0, 200))}</div>` : ''}
+        ${data.websiteAnalysis.error ? `<div class="badge red" style="margin-bottom:8px">${esc(plainFailure(String(data.websiteAnalysis.error).slice(0, 200)))}</div>` : ''}
         ${auditEnrichment(data.websiteAnalysis)}
         ${auditScreenshot(data.latestAudit)}
         ${findingsList(data.websiteAnalysis.findings)}`
@@ -722,8 +805,8 @@ async function renderLeadDetail(id) {
       <div class="panel">
         <div class="section-head"><h2>Qualification</h2></div>
         ${data.qualification ? `<div class="row" style="gap:18px;margin-bottom:8px">
-          <div><div class="card-label">Qualified</div><div class="mono" style="font-size:22px">${data.qualification.qualified ? 'yes' : 'no'}</div></div>
-          <div><div class="card-label">Confidence</div><div class="mono" style="font-size:22px">${data.qualification.confidence != null ? `${Math.round(Number(data.qualification.confidence) * 100)}%` : '—'}</div></div>
+          <div><div class="card-label">Qualified</div><div class="stat-value sm">${data.qualification.qualified ? 'Yes' : 'No'}</div></div>
+          <div><div class="card-label">Confidence</div><div class="stat-value sm">${data.qualification.confidence != null ? `${Math.round(Number(data.qualification.confidence) * 100)}%` : '—'}</div></div>
         </div>
         ${data.qualification.recommended_service ? `<div class="small" style="margin-top:4px"><span class="badge">${esc(String(data.qualification.recommended_service).replace(/_/g, ' '))}</span></div>` : ''}
         ${data.qualification.opportunity ? `<div class="small">${esc(data.qualification.opportunity)}</div>` : ''}
@@ -778,12 +861,14 @@ async function renderLeadDetail(id) {
     <div class="panel" style="margin-bottom:16px">
       <div class="section-head"><h2>Messages</h2></div>
       ${(data.messages || []).length ? data.messages.map((msg) => `
-        <div class="panel" style="background:rgba(124,156,255,.04);margin-bottom:10px">
-          <div class="spread"><b>${esc(msg.subject)}</b>${badge(msg.send_status)}</div>
+        <div class="panel ${msg.direction === 'inbound' ? 'bubble-in' : ''}" style="${msg.direction === 'inbound' ? '' : 'background:rgba(124,156,255,.04)'};margin-bottom:10px">
+          <div class="spread"><b>${msg.direction === 'inbound' ? esc(msg.from_name || msg.from_address || 'Prospect') : esc(msg.subject)}</b>
+            <div class="row">${badge(msg.direction === 'inbound' ? 'reply' : (msg.kind || 'message'))}${badge(msg.send_status || 'received')}</div></div>
+          ${msg.direction === 'inbound' && msg.triage_summary ? `<div class="small teal" style="margin-top:6px">${esc(msg.triage_summary)}</div>` : ''}
           <div class="small muted" style="margin-top:8px;white-space:pre-wrap">${esc((msg.body_text || '').slice(0, 600))}</div>
-          ${msg.error ? `<div class="badge red" style="margin-top:8px">${esc(String(msg.error).slice(0, 200))}</div>` : ''}
-          ${msg.send_status === 'draft' || msg.send_status === 'awaiting_approval' ? `<div class="row" style="gap:8px;margin-top:10px">
-            <button class="btn small" data-act="approve" data-id="${msg.id}">Approve & send</button>
+          ${msg.error ? `<div class="badge red" style="margin-top:8px">${esc(plainFailure(String(msg.error).slice(0, 200)))}</div>` : ''}
+          ${msg.direction !== 'inbound' && (msg.send_status === 'draft' || msg.send_status === 'awaiting_approval') ? `<div class="row" style="gap:8px;margin-top:10px">
+            <button class="btn small" data-act="approve" data-id="${msg.id}">Approve &amp; send</button>
             <button class="btn small" data-act="reject" data-id="${msg.id}">Reject</button></div>` : ''}
           ${msg.failure ? `<div class="badge red" style="margin-top:10px">${esc(msg.failure.title || 'Failed')} · ${esc(msg.failure.detail || '')}</div>` : ''}
         </div>`).join('') : '<div class="faint small">No messages yet.</div>'}
@@ -795,9 +880,36 @@ async function renderLeadDetail(id) {
     </div>
 
     <div class="panel">
-      <div class="section-head"><h2>Presence & evidence</h2></div>
-      ${data.presenceAnalysis ? `<div class="small muted" style="white-space:pre-wrap">${esc(JSON.stringify(data.presenceAnalysis, null, 2).slice(0, 1200))}</div>` : '<div class="faint small">No presence signals recorded.</div>'}
+      <div class="section-head"><h2>Presence &amp; evidence</h2></div>
+      ${data.presenceAnalysis ? presenceEvidence(data.presenceAnalysis) : '<div class="faint small">No presence signals recorded.</div>'}
     </div>`);
+}
+
+/**
+ * Presence evidence, read as sentences rather than a JSON dump. The raw
+ * payload is still available in the evidence history above.
+ */
+function presenceEvidence(analysis) {
+  const rows = [];
+  const push = (label, value) => { if (value !== null && value !== undefined && value !== '') rows.push([label, value]); };
+  push('Opportunity score', analysis.opportunity_score != null ? `${analysis.opportunity_score} of 100` : null);
+  push('Contact route found', analysis.contact_route_found ? 'Yes' : 'No');
+  push('Contact route', analysis.contact_route || null);
+  push('Contact evidence', analysis.contact_evidence || null);
+  const findings = Array.isArray(analysis.findings) ? analysis.findings : [];
+  const opportunities = Array.isArray(analysis.opportunities) ? analysis.opportunities : [];
+  const list = (title, items) => (items.length ? `<div style="margin-top:10px">
+      <div class="card-label">${title}</div>
+      <ul class="plain-list">${items.map((f) => `<li>${esc(typeof f === 'string' ? f : `${f.issue || f.opportunity || ''}${f.severity ? ` (${esc(f.severity)})` : ''}`)}</li>`).join('')}</ul>
+    </div>` : '');
+  if (!rows.length && !findings.length && !opportunities.length) {
+    return '<div class="faint small">Nothing recorded for this prospect yet.</div>';
+  }
+  return `${rows.length ? `<div class="table-wrap"><table class="table"><tbody>
+      ${rows.map(([k, v]) => `<tr><td class="small muted" style="width:200px">${esc(k)}</td><td class="small">${esc(String(v))}</td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+    ${list('What we found', findings)}
+    ${list('What we can offer', opportunities)}`;
 }
 
 /** Renders the latest versioned audit and its captured evidence (spec §12/§30). */
@@ -806,12 +918,12 @@ function auditHistory(audit) {
   const items = Array.isArray(audit.evidence) ? audit.evidence : [];
   const kindLabel = (k) => titleCase(String(k || '').replace(/_/g, ' '));
   return `<div class="row" style="gap:18px;margin-bottom:10px">
-      <div><div class="card-label">Version</div><div class="mono" style="font-size:22px">v${esc(audit.version)}</div></div>
-      <div><div class="card-label">Status</div><div class="mono" style="font-size:22px">${esc(audit.status || '—')}</div></div>
-      <div><div class="card-label">Trigger</div><div class="mono" style="font-size:22px">${esc(audit.trigger || '—')}</div></div>
+      <div><div class="card-label">Version</div><div class="stat-value sm">v${esc(audit.version)}</div></div>
+      <div><div class="card-label">Status</div><div class="stat-value sm">${esc(titleCase(audit.status || 'unknown'))}</div></div>
+      <div><div class="card-label">Trigger</div><div class="stat-value sm">${esc(stageLabel(audit.trigger || 'manual'))}</div></div>
       <div><div class="card-label">When</div><div class="small muted" style="padding-top:8px">${fmtRel(audit.finished_at || audit.started_at || audit.created_at)}</div></div>
     </div>
-    ${audit.error ? `<div class="badge red" style="margin-bottom:8px">${esc(String(audit.error).slice(0, 200))}</div>` : ''}
+    ${audit.error ? `<div class="badge red" style="margin-bottom:8px">${esc(plainFailure(String(audit.error).slice(0, 200)))}</div>` : ''}
     ${items.length ? `<div class="table-wrap"><table class="table">
       <thead><tr><th>Evidence</th><th>Source</th><th>Recorded</th></tr></thead><tbody>
       ${items.map((e) => `<tr>
@@ -864,7 +976,14 @@ function auditEnrichment(site) {
   const chips = [];
   if (perf) {
     if (perf.ok === false) {
-      chips.push(`<div class="badge red" style="margin:4px 0">Performance not measured · ${esc(String(perf.error || perf.code || 'unavailable').slice(0, 120))}</div>`);
+      // A provider's own error text ("QUOTA EXCEEDED FOR QUOTA METRIC ...") is
+      // noise to the reader; say what it means for them instead.
+      const reason = {
+        PAGESPEED_HTTP_ERROR: 'the public performance service is rate-limiting us right now',
+        PAGESPEED_UNREACHABLE: 'the public performance service could not be reached',
+        PAGESPEED_NO_RESULT: 'the public performance service returned no result for this site',
+      }[perf.code] || 'the performance check did not complete';
+      chips.push(`<div class="badge red" style="margin:4px 0">Performance not measured — ${esc(reason)}. The rest of the analysis is unaffected.</div>`);
     } else {
       const s = perf.scores || {};
       const chip = (label, value) => `<div><div class="card-label">${label}</div><div class="mono" style="font-size:18px">${value == null ? '—' : esc(value)}</div></div>`;
@@ -898,24 +1017,65 @@ function findingsList(findings) {
 // ============================================================
 // INBOX (conversations)
 // ============================================================
+const inboxFilters = { status: '', q: '' };
+
+/** Clamp a message body to a readable one-line preview. */
+const preview = (text, max = 140) => {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max - 1)}\u2026` : s;
+};
+
 async function renderInbox() {
   const { conversations } = await api('/api/conversations');
-  const list = conversations || [];
+  let rows = conversations || [];
+  if (inboxFilters.status) rows = rows.filter((c) => c.status === inboxFilters.status);
+  if (inboxFilters.q) {
+    const q = inboxFilters.q.toLowerCase();
+    rows = rows.filter((c) => `${c.business_name || ''} ${c.mission_name || ''} ${c.last_body || ''}`
+      .toLowerCase().includes(q));
+  }
+  const groups = [
+    { id: '', label: 'All' },
+    { id: 'reply_received', label: 'Replied' },
+    { id: 'sent', label: 'Sent' },
+    { id: 'follow_up_scheduled', label: 'Follow-up scheduled' },
+    { id: 'suppressed', label: 'Suppressed' },
+  ].map((g) => ({ ...g, n: g.id ? rows.filter((c) => c.status === g.id).length : rows.length }));
+
   setView(`
-    <div class="section-head"><h2>${list.length} conversation${list.length === 1 ? '' : 's'}</h2></div>
-    ${list.length ? `<div class="stack">${list.map((c) => `
-      <div class="panel row-click" data-nav="inbox/${c.id}">
-        <div class="spread">
-          <div><b>Conversation #${c.id}</b> <span class="faint small">· lead ${c.lead_id}</span></div>
-          <div class="row">${badge(c.status)}</div>
+    <div class="spread" style="margin-bottom:14px">
+      <div class="section-head" style="margin:0"><h2>${num(rows.length)} thread${rows.length === 1 ? '' : 's'}</h2></div>
+      <input id="inbox-q" placeholder="Search threads…" value="${esc(inboxFilters.q)}" style="max-width:240px" />
+    </div>
+    <div class="chips" style="margin-bottom:14px">
+      ${groups.map((g) => `<button class="chip ${inboxFilters.status === g.id ? 'on' : ''}" data-act="inbox-filter" data-status="${g.id}">
+        ${g.label} <span class="chip-n">${g.n}</span></button>`).join('')}
+    </div>
+    ${rows.length ? `<div class="stack">${rows.map((c) => {
+    const inboundText = c.inbound_body || '';
+    const where = [c.city, c.region, c.country].filter(Boolean).join(', ');
+    const text = inboundText || c.last_body || '';
+    return `
+      <div class="panel row-click thread-row" data-nav="inbox/${c.id}">
+        <div class="thread-main">
+          <div class="spread" style="align-items:baseline">
+            <b>${esc(c.business_name || `Thread #${c.id}`)}</b>
+            <span class="faint small">${fmtRel(c.inbound_at || c.updated_at || c.created_at)}</span>
+          </div>
+          <div class="row small faint" style="gap:8px;margin-top:2px">
+            ${c.mission_name ? `<span>${esc(c.mission_name)}</span>` : ''}
+            ${where ? `<span>&middot; ${esc(where)}</span>` : ''}
+            ${c.reply_count ? `<span>&middot; ${c.reply_count} repl${c.reply_count === 1 ? 'y' : 'ies'}</span>` : ''}
+          </div>
+          <div class="small muted thread-preview">${inboundText ? '<b class="teal">Replied:</b> ' : ''}${esc(preview(text)) || '<span class="faint">No message yet</span>'}</div>
         </div>
-        <div class="row" style="gap:16px;margin-top:8px">
-          <span class="small muted">Outbound: ${num(c.last_outbound_at ? 1 : 0)}</span>
-          <span class="small muted">Replies: ${num(c.reply_count)}</span>
-          <span class="small faint">Updated ${fmtRel(c.updated_at || c.created_at)}</span>
-        </div>
-      </div>`).join('')}</div>`
-      : `<div class="empty"><div class="big">Inbox empty</div><div>Outreach threads appear here once messages are generated.</div></div>`}`);
+        <div class="row thread-side">${badge(c.status)}</div>
+      </div>`;
+  }).join('')}</div>`
+      : `<div class="empty"><div class="big">No threads match</div><div>Outreach threads appear here once a mission sends its first message.</div></div>`}`);
+
+  const box = document.getElementById('inbox-q');
+  if (box) box.addEventListener('input', (e) => { inboxFilters.q = e.target.value; renderInbox(); });
 }
 
 async function renderConversation(id) {
@@ -927,14 +1087,21 @@ async function renderConversation(id) {
       <div class="row">${badge(c.status)}${lead ? `<button class="btn small" data-nav="leads/${lead.id}">${esc(lead.businessName)}</button>` : ''}</div>
     </div>
     <div class="panel pad-lg">
-      <div class="section-head"><h2>Thread</h2></div>
+      <div class="section-head"><h2>Thread</h2>
+        <span class="small faint">${msgs.filter((m) => m.direction === 'inbound').length} in
+          &middot; ${msgs.filter((m) => m.direction !== 'inbound').length} out</span></div>
       ${msgs.length ? `<div class="stack">${msgs.map((m) => `
-        <div class="panel" style="background:rgba(124,156,255,.04)">
-          <div class="spread"><b>${esc(m.subject)}</b><div class="row">${badge(m.kind || 'message')}${badge(m.send_status)}</div></div>
+        <div class="panel ${m.direction === 'inbound' ? 'bubble-in' : ''}" style="${m.direction === 'inbound' ? '' : 'background:rgba(124,156,255,.04)'}">
+          <div class="spread">
+            <b>${m.direction === 'inbound' ? esc(m.from_name || m.from_address || 'Prospect') : esc(m.subject || 'Message')}</b>
+            <div class="row">${badge(m.direction === 'inbound' ? 'reply' : (m.kind || 'message'))}${badge(m.send_status || 'received')}</div>
+          </div>
+          ${m.direction === 'inbound' && m.triage_summary
+    ? `<div class="small teal" style="margin-top:6px">Read as ${esc(titleCase(m.intent || 'a reply'))}: ${esc(m.triage_summary)}</div>` : ''}
           <div class="small muted" style="margin-top:8px;white-space:pre-wrap">${esc(m.body_text || '')}</div>
-          <div class="faint small" style="margin-top:8px">${esc(fmtDate(m.sent_at || m.created_at))}</div>
-          ${m.send_status === 'draft' || m.send_status === 'awaiting_approval' ? `<div class="row" style="gap:8px;margin-top:10px">
-            <button class="btn small" data-act="approve" data-id="${m.id}">Approve & send</button>
+          <div class="faint small" style="margin-top:8px">${esc(fmtDate(m.received_at || m.sent_at || m.created_at))}</div>
+          ${m.direction !== 'inbound' && (m.send_status === 'draft' || m.send_status === 'awaiting_approval') ? `<div class="row" style="gap:8px;margin-top:10px">
+            <button class="btn small" data-act="approve" data-id="${m.id}">Approve &amp; send</button>
             <button class="btn small" data-act="reject" data-id="${m.id}">Reject</button></div>` : ''}
         </div>`).join('')}</div>` : '<div class="faint small">No messages.</div>'}
     </div>`);
@@ -971,39 +1138,104 @@ async function renderNotifications() {
 // ============================================================
 // ACTIVITY  (§36 detailed activity, §37)
 // ============================================================
+// One autonomous run produces dozens of identical rows, so the list is grouped
+// by mission and collapsed by default. What matters at a glance is whether
+// anything is stuck, so failures stay expanded and everything else folds away.
+const activityFilters = { missionId: '', only: '' };
+const ACTIVITY_ROWS = 12;
+let activityVisible = ACTIVITY_ROWS;
+
 async function renderActivity() {
-  const { jobs, stats, audit } = await api('/api/activity');
+  const [{ jobs, stats, audit }, { missions }] = await Promise.all([
+    api('/api/activity'), api('/api/missions?includeArchived=1'),
+  ]);
   const list = jobs || [];
   const s = stats || {};
+  const names = new Map((missions || []).map((m) => [m.id, m.name]));
+
+  let rows = list;
+  if (activityFilters.missionId) rows = rows.filter((j) => String(j.mission_id) === String(activityFilters.missionId));
+  if (activityFilters.only === 'failed') rows = rows.filter((j) => j.status === 'failed');
+  if (activityFilters.only === 'live') rows = rows.filter((j) => ['queued', 'running'].includes(j.status));
+  if (activityFilters.only !== 'failed' && activityVisible > rows.length) activityVisible = ACTIVITY_ROWS;
+
+  const failed = rows.filter((j) => j.status === 'failed');
+  const others = rows.filter((j) => j.status !== 'failed');
+  const visible = others.slice(0, activityVisible);
+
   setView(`
     <div class="spread" style="margin-bottom:14px">
       <div class="section-head" style="margin:0"><h2>Activity</h2></div>
-      <div class="row">${badge('queued', 'faint')} ${badge(`running ${num(s.running || 0)}`, 'green')} ${badge(`failed ${num(s.failed || 0)}`, (s.failed ? 'red' : 'faint'))}</div>
+      <div class="row">${badge(`running ${num(s.running || 0)}`, (s.running ? 'green' : 'faint'))}
+        ${badge(`queued ${num(s.queued || 0)}`, 'faint')}
+        ${badge(`failed ${num(s.failed || 0)}`, (s.failed ? 'red' : 'faint'))}</div>
     </div>
-    <div class="panel pad-lg">
-      <div class="card-label">Jobs across every mission</div>
-      ${list.length ? `<div class="table-wrap"><table class="table">
-        <thead><tr><th>Stage</th><th>Mission</th><th>State</th><th>Attempts</th><th>Updated</th><th></th></tr></thead>
-        <tbody>${list.map((j) => `<tr>
-          <td>${badge(j.stage)}</td>
-          <td>${j.mission_id ? `<button class="btn small" data-nav="missions/${j.mission_id}">#${j.mission_id}</button>` : '<span class="faint small">system</span>'}</td>
-          <td>${badge(j.status)}${j.failure ? `<div class="small muted" style="margin-top:4px">${esc(j.failure.title)}</div>` : ''}</td>
-          <td class="small">${num(j.attempts)}/${num(j.max_attempts)}</td>
-          <td class="small faint">${fmtRel(j.updated_at)}</td>
-          <td>${j.status === 'failed' ? `<button class="btn small" data-act="retry-job" data-id="${j.id}">Retry</button>` : ''}</td>
-        </tr>`).join('')}</tbody></table></div>`
-      : `<div class="empty"><div class="big">No activity yet</div><div>Jobs appear here the moment the autonomous worker starts them.</div></div>`}
+    <div class="chips" style="margin-bottom:14px">
+      <button class="chip ${!activityFilters.only ? 'on' : ''}" data-act="activity-filter" data-only="" data-mission="${activityFilters.missionId}">Everything <span class="chip-n">${rows.length}</span></button>
+      <button class="chip ${activityFilters.only === 'failed' ? 'on' : ''}" data-act="activity-filter" data-only="failed" data-mission="${activityFilters.missionId}">Needs attention <span class="chip-n">${rows.filter((j) => j.status === 'failed').length}</span></button>
+      <button class="chip ${activityFilters.only === 'live' ? 'on' : ''}" data-act="activity-filter" data-only="live" data-mission="${activityFilters.missionId}">In flight</button>
     </div>
-    ${(audit || []).length ? `<div class="panel pad-lg" style="margin-top:14px">
-      <div class="card-label">Audit trail</div>
-      <div class="table-wrap"><table class="table">
+    ${rows.length ? `
+      ${failed.length ? `<div class="panel" style="margin-bottom:14px;border-color:rgb(226,86,86,.35)">
+        <div class="spread" style="padding:14px 16px;border-bottom:1px solid var(--line)">
+          <b>${failed.length} job${failed.length === 1 ? '' : 's'} stopped and will not retry on their own</b>
+          <span class="small faint">${esc(failed[0].failure?.title || 'Needs your attention')}</span>
+        </div>
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>Stage</th><th>Mission</th><th>What happened</th><th>When</th><th></th></tr></thead>
+          <tbody>${failed.map((j) => `<tr>
+            <td>${badge(stageLabel(j.stage), toneOf(j.stage))}</td>
+            <td class="small">${missionCell(j, names)}</td>
+            <td><div class="small">${esc(j.failure?.title || 'The job failed.')}</div>
+                <div class="small faint">${esc(j.failure?.detail || '')}</div></td>
+            <td class="small faint">${fmtRel(j.updated_at)}</td>
+            <td><button class="btn small" data-act="retry-job" data-id="${j.id}">Retry</button></td>
+          </tr>`).join('')}</tbody></table></div>
+      </div>` : ''}
+      <div class="panel">
+        <div class="spread" style="padding:14px 16px;border-bottom:1px solid var(--line)">
+          <b>Completed work</b>
+          <select id="activity-mission" style="max-width:240px">
+            <option value="">All missions</option>
+            ${(missions || []).map((m) => `<option value="${m.id}" ${String(activityFilters.missionId) === String(m.id) ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
+          </select>
+        </div>
+        ${visible.length ? `<div class="table-wrap"><table class="table">
+          <thead><tr><th>Stage</th><th>Mission</th><th>State</th><th>Attempts</th><th>Updated</th></tr></thead>
+          <tbody>${visible.map((j) => `<tr>
+            <td>${badge(stageLabel(j.stage), toneOf(j.stage))}</td>
+            <td class="small">${missionCell(j, names)}</td>
+            <td>${badge(j.status)}</td>
+            <td class="small">${num(j.attempts)}/${num(j.max_attempts)}</td>
+            <td class="small faint">${fmtRel(j.updated_at)}</td>
+          </tr>`).join('')}</tbody></table></div>
+          ${others.length > activityVisible ? `<div style="padding:12px 16px;border-top:1px solid var(--line)">
+            <button class="btn small" data-act="activity-more">Show ${Math.min(50, others.length - activityVisible)} more of ${num(others.length)}</button>
+          </div>` : ''}`
+          : '<div class="empty"><div class="big">Nothing completed yet</div><div>Finished work appears here.</div></div>'}
+      </div>`
+      : `<div class="empty"><div class="big">No activity matches</div><div>Jobs appear here the moment the autonomous worker starts them.</div></div>`}
+    ${(audit || []).length ? `<details class="panel pad-lg" style="margin-top:14px">
+      <summary style="cursor:pointer"><b>Audit trail</b> <span class="faint small">${num(audit.length)} recorded events</span></summary>
+      <div class="table-wrap" style="margin-top:12px"><table class="table">
         <thead><tr><th>When</th><th>Action</th><th>Entity</th><th>By</th></tr></thead>
         <tbody>${audit.map((a) => `<tr>
           <td class="small faint">${fmtRel(a.at)}</td>
           <td class="small">${esc(a.action)}</td>
           <td class="small muted">${esc(a.entity_type || '')}${a.entity_id != null ? ` #${a.entity_id}` : ''}</td>
           <td class="small faint">${esc(a.actor || '')}</td>
-        </tr>`).join('')}</tbody></table></div></div>` : ''}`);
+        </tr>`).join('')}</tbody></table></div></details>` : ''}`);
+
+  const sel = document.getElementById('activity-mission');
+  if (sel) sel.addEventListener('change', (e) => { activityFilters.missionId = e.target.value; renderActivity(); });
+}
+
+function missionCell(job, names) {
+  if (!job.mission_id) return '<span class="faint small">system</span>';
+  const name = names.get(job.mission_id);
+  return name
+    ? `<button class="btn small" data-nav="missions/${job.mission_id}">${esc(name)}</button>`
+    : `<button class="btn small" data-nav="missions/${job.mission_id}">Mission #${job.mission_id}</button>`;
 }
 
 // ============================================================
@@ -1323,6 +1555,9 @@ async function runAction(act, el) {
         return;
       }
       case 'read-notif': await api(`/api/notifications/${el.dataset.id}/read`, { method: 'POST', body: {} }); render(); return;
+      case 'inbox-filter': inboxFilters.status = el.dataset.status || ''; renderInbox(); return;
+      case 'activity-filter': activityFilters.only = el.dataset.only || ''; activityFilters.missionId = el.dataset.mission || ''; renderActivity(); return;
+      case 'activity-more': activityVisible += 38; renderActivity(); return;
       case 'toggle-pause': {
         const paused = Boolean(state.user?.automationPaused);
         const r = await api('/api/auth/automation-paused', { method: 'POST', body: { paused: !paused } });

@@ -33,19 +33,32 @@ export const BUSINESS_TYPES = [
   { key: 'realestate', label: 'estate agencies', keywords: ['estate agent', 'realtor', 'real estate', 'property'], tags: [{ k: 'shop', v: 'estate_agent' }] },
 ];
 
+/** Fold a word to a comparable stem so "restaurants" matches "restaurant". */
+function stem(word) {
+  const w = String(word).toLowerCase();
+  if (w.length > 4 && /[^s]s$/.test(w)) return w.slice(0, -1);
+  return w;
+}
+
 /**
  * Resolve a mission's free-text target description into concrete data-source
  * filters. Returns an empty array when nothing matches, letting the caller
  * decide how to proceed rather than guessing a type.
+ *
+ * Matching is on whole words (plural-tolerant): "bookshops" must not resolve to
+ * the generic "shops" tag, because a wrong tag returns the wrong businesses.
  */
 export function resolveBusinessTypes(description) {
-  const text = String(description || '').toLowerCase();
-  if (!text.trim()) return [];
-  const matched = [];
-  for (const type of BUSINESS_TYPES) {
-    if (type.keywords.some((kw) => text.includes(kw))) matched.push(type);
-  }
-  return matched;
+  const words = new Set(
+    String(description || '')
+      .toLowerCase()
+      .split(/[^a-z0-9&'-]+/)
+      .filter(Boolean)
+      .map(stem),
+  );
+  if (!words.size) return [];
+  return BUSINESS_TYPES.filter((type) => type.keywords.some((keyword) =>
+    keyword.split(/[^a-z0-9&'-]+/).filter(Boolean).some((w) => words.has(stem(w)))));
 }
 
 /**

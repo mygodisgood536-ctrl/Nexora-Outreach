@@ -3,11 +3,24 @@ import { nextWindowStart, isWithinWindows, parseTimeToMinutes } from '../core/ti
 import { normalizeCountry, slugify, isValidTimeZone } from '../core/normalize.js';
 import { recordAudit } from './audit.js';
 import { sqliteUtc, nowSqlite } from '../core/time.js';
+import { normaliseSourceIds } from '../discovery/sources.js';
 
 export const SENDING_MODES = ['scout_only', 'review_send', 'autopilot'];
 export const MISSION_STATUS = ['draft', 'scheduled', 'running', 'paused', 'stopped', 'completed', 'archived'];
 
 export const ARCHIVE_RETENTION_DAYS = 180;
+
+/** A stored JSON list that may be absent or malformed must never break a read. */
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Columns a user may edit directly; structure changes go through their own methods. */
 const EDITABLE = new Set([
@@ -33,8 +46,9 @@ export class MissionService {
       `INSERT INTO missions(user_id, name, objective_raw, service, offer_summary, target_description,
                              investigation_notes, outreach_instructions, sending_mode, timezone,
                              follow_up_delay_days, max_follow_ups, daily_send_limit, max_leads_per_run,
-                             hourly_send_limit, min_seconds_between_sends, campaign_start_at, campaign_end_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             hourly_send_limit, min_seconds_between_sends, campaign_start_at, campaign_end_at,
+                             discovery_sources)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        RETURNING id`,
       userId, name, input.objective_raw ?? null, input.service || 'other',
       input.offer_summary ?? null, input.target_description ?? null,
@@ -43,7 +57,8 @@ export class MissionService {
       input.follow_up_delay_days ?? 2, input.max_follow_ups ?? 3,
       input.daily_send_limit ?? 20, input.max_leads_per_run ?? 25,
       input.hourly_send_limit ?? 0, input.min_seconds_between_sends ?? 0,
-      input.campaign_start_at ?? null, input.campaign_end_at ?? null
+      input.campaign_start_at ?? null, input.campaign_end_at ?? null,
+      JSON.stringify(normaliseSourceIds(input.discovery_sources))
     );
     const id = result.lastInsertRowid;
 
@@ -107,6 +122,13 @@ export class MissionService {
     }
     if (Array.isArray(patch.windows)) await this.setWindows(id, patch.windows);
     if (Array.isArray(patch.locations)) await this.setLocations(id, patch.locations);
+    if (patch.discovery_sources !== undefined) {
+      // §11 — the mission chooses which discovery sources it uses.
+      await this.db.run(
+        'UPDATE missions SET discovery_sources = ?, updated_at = datetime(\'now\') WHERE id = ?',
+        JSON.stringify(normaliseSourceIds(patch.discovery_sources)), id,
+      );
+    }
     return this.get(id);
   }
 
@@ -321,6 +343,7 @@ export class MissionService {
       campaignStartAt: mission.campaign_start_at,
       campaignEndAt: mission.campaign_end_at,
       maxLeadsPerRun: mission.max_leads_per_run,
+      discoverySources: normaliseSourceIds(parseJsonArray(mission.discovery_sources)),
       interpreted: mission.interpreted_json ? JSON.parse(mission.interpreted_json) : null,
       interpretedReviewed: Boolean(mission.interpreted_reviewed),
       windows: windows.map((w) => ({

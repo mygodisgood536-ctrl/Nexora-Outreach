@@ -20,7 +20,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const txStore = new AsyncLocalStorage();
 
 /** Bumped whenever schema.sql / schema.postgres.sql change. */
-export const SCHEMA_VERSION = '8';
+export const SCHEMA_VERSION = '10';
 
 /** Arbitrary but stable advisory-lock key guarding schema application. */
 const SCHEMA_LOCK_ID = 728_190_431;
@@ -50,6 +50,7 @@ const POSTGRES_UPGRADES = [
   // Spec §22: retention stamp set when an archived mission's configuration is
   // dropped. Nullable, so existing rows keep working.
   'ALTER TABLE missions ADD COLUMN IF NOT EXISTS purged_at TEXT',
+  'ALTER TABLE missions ADD COLUMN IF NOT EXISTS discovery_sources TEXT NOT NULL DEFAULT \'["overpass","nominatim"]\'',
 ];
 
 /**
@@ -67,6 +68,10 @@ const SQLITE_UPGRADES = [
   { table: 'outreach_messages', column: 'error_code', sql: 'ALTER TABLE outreach_messages ADD COLUMN error_code TEXT' },
   { table: 'qualifications', column: 'recommended_service', sql: 'ALTER TABLE qualifications ADD COLUMN recommended_service TEXT' },
   { table: 'missions', column: 'purged_at', sql: 'ALTER TABLE missions ADD COLUMN purged_at TEXT' },
+  {
+    table: 'missions', column: 'discovery_sources',
+    sql: `ALTER TABLE missions ADD COLUMN discovery_sources TEXT NOT NULL DEFAULT '["overpass","nominatim"]'`,
+  },
 ];
 
 export class Db {

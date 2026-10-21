@@ -203,6 +203,7 @@ export const config = {
 
   discovery: {
     overpassUrl: process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter',
+    nominatimUrl: process.env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org/search',
     googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY || '',
   },
 

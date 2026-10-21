@@ -1,27 +1,27 @@
-﻿-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
--- Nexora Outreach â€” persistent schema (spec Â§28 High-Level Data Model)
--- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+﻿-- ═══════════════════════════════════════════════════════════════════
+-- Nexora Outreach — persistent schema (spec §28 High-Level Data Model)
+-- ═══════════════════════════════════════════════════════════════════
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
--- â”€â”€ Accounts & authentication (spec Â§5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Accounts & authentication (spec §5) ──────────────────────────
 CREATE TABLE IF NOT EXISTS users (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   full_name         TEXT    NOT NULL,
   username          TEXT    NOT NULL,
-  username_lower    TEXT    NOT NULL UNIQUE,   -- server-side uniqueness (Â§5.1)
+  username_lower    TEXT    NOT NULL UNIQUE,   -- server-side uniqueness (§5.1)
   security_question TEXT    NOT NULL,
   created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
-  recovery_code_hash TEXT,                     -- safe recovery, NOT the security question (Â§5.3)
+  recovery_code_hash TEXT,                     -- safe recovery, NOT the security question (§5.3)
   failed_attempts   INTEGER NOT NULL DEFAULT 0,
-  locked_until      TEXT,                      -- progressive lockout (Â§5.3)
-  automation_paused INTEGER NOT NULL DEFAULT 0, -- "Pause All Automation" (Â§26)
+  locked_until      TEXT,                      -- progressive lockout (§5.3)
+  automation_paused INTEGER NOT NULL DEFAULT 0, -- "Pause All Automation" (§26)
   timezone          TEXT    NOT NULL DEFAULT 'UTC',
   created_ms        BIGINT NOT NULL DEFAULT 0,   -- epoch milliseconds (postgres int4 overflows ~2.1e9)
   deleted_at        TEXT
 );
 
--- Security answer stored ONLY as a scrypt hash (Â§5.2)
+-- Security answer stored ONLY as a scrypt hash (§5.2)
 CREATE TABLE IF NOT EXISTS security_credentials (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id      INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
   expires_at   TEXT    NOT NULL,
-  revoked_at   TEXT,                            -- explicit revocation (Â§5.3)
+  revoked_at   TEXT,                            -- explicit revocation (§5.3)
   last_seen_at TEXT,
   user_agent   TEXT,
   ip           TEXT
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS login_attempts (
 );
 CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(username_lower, at);
 
--- One-time account recovery codes (spec Â§5.3).
+-- One-time account recovery codes (spec §5.3).
 -- Each code is shown exactly once at creation. Only its scrypt hash is stored,
 -- and every code carries its own salt so the codes are independent of each other.
 CREATE TABLE IF NOT EXISTS recovery_codes (
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id);
 
--- â”€â”€ Email authorization (spec Â§6) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Email authorization (spec §6) ────────────────────────────────
 CREATE TABLE IF NOT EXISTS email_connections (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -85,9 +85,9 @@ CREATE TABLE IF NOT EXISTS email_connections (
   UNIQUE(user_id, provider)
 );
 
--- OAuth `state` nonces (spec Â§6). Persisted so a callback can only be
+-- OAuth `state` nonces (spec §6). Persisted so a callback can only be
 -- accepted if this server issued it: one-time use, short expiry, and the
--- raw value is never stored â€” only its SHA-256 digest.
+-- raw value is never stored — only its SHA-256 digest.
 CREATE TABLE IF NOT EXISTS oauth_states (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   state_hash   TEXT    NOT NULL UNIQUE,   -- sha256 hex of the nonce we issued
@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS oauth_states (
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_states_user ON oauth_states(user_id);
 
--- â”€â”€ Missions (spec Â§8) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Missions (spec §8) ───────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS missions (
   id                   INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -120,11 +120,12 @@ CREATE TABLE IF NOT EXISTS missions (
   campaign_start_at    TEXT,                          -- optional scheduling window (§10/§27)
   campaign_end_at      TEXT,
   max_leads_per_run    INTEGER NOT NULL DEFAULT 25,
+  discovery_sources    TEXT    NOT NULL DEFAULT '["overpass","nominatim"]',  -- §11 sources this mission may use
   status               TEXT    NOT NULL DEFAULT 'draft',
   activated_at         TEXT,
   last_run_at          TEXT,
   next_run_at          TEXT,
-  interpreted_json     TEXT,                    -- NL -> structured settings, shown for review (Â§8)
+  interpreted_json     TEXT,                    -- NL -> structured settings, shown for review (§8)
   interpreted_reviewed INTEGER NOT NULL DEFAULT 0,
   archived_at          TEXT,
   purged_at            TEXT,          -- retention for archived missions (§22)
@@ -146,7 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_mission_windows ON mission_windows(mission_id, da
 CREATE TABLE IF NOT EXISTS target_locations (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   mission_id INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-  country    TEXT    NOT NULL,                 -- ISO-3166 alpha-2. Never a vague region (Â§9)
+  country    TEXT    NOT NULL,                 -- ISO-3166 alpha-2. Never a vague region (§9)
   region     TEXT,
   city       TEXT,
   priority   TEXT    NOT NULL DEFAULT 'medium',
@@ -154,7 +155,7 @@ CREATE TABLE IF NOT EXISTS target_locations (
 );
 CREATE INDEX IF NOT EXISTS idx_target_locations ON target_locations(mission_id, country);
 
--- â”€â”€ Leads (spec Â§11/Â§14) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Leads (spec §11/§14) ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS leads (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
   mission_id         INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -162,7 +163,7 @@ CREATE TABLE IF NOT EXISTS leads (
   business_name      TEXT    NOT NULL,
   website_url        TEXT,
   domain             TEXT,
-  dedupe_key         TEXT    NOT NULL,          -- normalized identity (Â§29)
+  dedupe_key         TEXT    NOT NULL,          -- normalized identity (§29)
   country            TEXT,
   region             TEXT,
   city               TEXT,
@@ -183,7 +184,7 @@ CREATE TABLE IF NOT EXISTS leads (
 );
 CREATE INDEX IF NOT EXISTS idx_leads_mission ON leads(mission_id, status);
 CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id, created_at);
--- Cross-mission duplicate prevention (Â§29)
+-- Cross-mission duplicate prevention (§29)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_user_dedupe ON leads(user_id, dedupe_key);
 
 CREATE TABLE IF NOT EXISTS website_analyses (
@@ -200,7 +201,7 @@ CREATE TABLE IF NOT EXISTS website_analyses (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Businesses with no website still get investigated (spec Â§13)
+-- Businesses with no website still get investigated (spec §13)
 CREATE TABLE IF NOT EXISTS presence_analyses (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   lead_id    INTEGER NOT NULL UNIQUE REFERENCES leads(id) ON DELETE CASCADE,
@@ -229,7 +230,7 @@ CREATE TABLE IF NOT EXISTS qualifications (
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- â”€â”€ Outreach / conversations (spec Â§15/Â§18/Â§19) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Outreach / conversations (spec §15/§18/§19) ──────────────────
 CREATE TABLE IF NOT EXISTS conversations (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   lead_id           INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
@@ -263,13 +264,32 @@ CREATE TABLE IF NOT EXISTS outreach_messages (
   send_status        TEXT    NOT NULL DEFAULT 'draft',
   provider           TEXT,
   provider_message_id TEXT,
-  idempotency_key    TEXT UNIQUE,             -- prevents duplicate send (Â§30)
+  idempotency_key    TEXT UNIQUE,             -- prevents duplicate send (§30)
   error              TEXT,
-  error_code         TEXT,                    -- stable machine code for the failure UI (Â§30)
+  error_code         TEXT,                    -- stable machine code for the failure UI (§30)
   sent_at            TEXT,
   opened_at          TEXT,
   created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Inbound replies (spec §18). The reply text is the whole point of monitoring a
+-- mailbox: recording only the count would leave the user unable to read what a
+-- prospect actually said.
+CREATE TABLE IF NOT EXISTS inbound_messages (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id      INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  lead_id              INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  provider_message_id  TEXT,
+  from_address         TEXT,
+  from_name            TEXT,
+  subject              TEXT,
+  body_text            TEXT    NOT NULL DEFAULT '',
+  intent               TEXT,
+  triage_summary       TEXT,
+  received_at          TEXT,
+  created_at           TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_inbound_conversation ON inbound_messages(conversation_id, id);
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON outreach_messages(conversation_id, kind);
 
 CREATE TABLE IF NOT EXISTS follow_ups (
@@ -286,7 +306,7 @@ CREATE TABLE IF NOT EXISTS follow_ups (
 );
 CREATE INDEX IF NOT EXISTS idx_followups_due ON follow_ups(status, due_at);
 
--- â”€â”€ AI runtime selection (spec Â§7/Â§31) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── AI runtime selection (spec §7/§31) ───────────────────────────
 -- The CATALOG is always discovered live from OpenCode at runtime.
 -- This table persists only the user's current selection.
 CREATE TABLE IF NOT EXISTS ai_settings (
@@ -310,7 +330,7 @@ CREATE TABLE IF NOT EXISTS ai_call_log (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ai_call_log ON ai_call_log(user_id, created_at);
--- â”€â”€ Automation (spec Â§23) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Automation (spec §23) ────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS automation_jobs (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -344,7 +364,7 @@ CREATE TABLE IF NOT EXISTS job_history (
   at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- â”€â”€ Notifications (spec Â§25) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Notifications (spec §25) ─────────────────────────────────────
 CREATE TABLE IF NOT EXISTS notifications (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -359,7 +379,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, created_at);
 
--- â”€â”€ Suppression / opt-out (spec Â§17/Â§29) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Suppression / opt-out (spec §17/§29) ─────────────────────────
 CREATE TABLE IF NOT EXISTS suppressions (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -372,7 +392,7 @@ CREATE TABLE IF NOT EXISTS suppressions (
 );
 CREATE INDEX IF NOT EXISTS idx_suppressions_user ON suppressions(user_id);
 
--- â”€â”€ Audit (spec Â§5.3/Â§17/Â§30) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Audit (spec §5.3/§17/§30) ────────────────────────────────────
 CREATE TABLE IF NOT EXISTS audit_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -386,7 +406,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_events(user_id, at);
 
--- â”€â”€ Versioned evidence (spec Â§12/Â§13/Â§21/Â§30) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Versioned evidence (spec §12/§13/§21/§30) ────────────────────
 -- One `audits` row per evidence-collection pass over a lead, so every claim
 -- can be traced back to the exact version it was drawn from. The current
 -- projections (website_analyses / presence_analyses / qualifications) are
@@ -425,7 +445,7 @@ CREATE TABLE IF NOT EXISTS audit_evidence (
 CREATE INDEX IF NOT EXISTS idx_audit_evidence_audit ON audit_evidence(audit_id, kind);
 CREATE INDEX IF NOT EXISTS idx_audit_evidence_lead ON audit_evidence(lead_id, created_at);
 
--- â”€â”€ Sent-volume guard (deliverability, spec Â§17) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Sent-volume guard (deliverability, spec §17) ──────────────────
 CREATE TABLE IF NOT EXISTS send_log (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -435,7 +455,7 @@ CREATE TABLE IF NOT EXISTS send_log (
   UNIQUE(user_id, mission_id, sent_on)
 );
 
--- â”€â”€ Runtime meta â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Runtime meta ─────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT

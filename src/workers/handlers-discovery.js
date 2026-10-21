@@ -1,7 +1,8 @@
 import { STAGE } from './queue.js';
 import { err } from '../core/errors.js';
 import config from '../config.js';
-import { resolveBusinessTypes, discoverViaOverpass } from '../discovery/overpass.js';
+import { resolveBusinessTypes } from '../discovery/overpass.js';
+import { discoverCandidates, normaliseSourceIds } from '../discovery/sources.js';
 import { fetchUrl } from '../research/fetcher.js';
 import { checkLinks as defaultCheckLinks } from '../research/link-check.js';
 import { runPagespeed } from '../research/pagespeed.js';
@@ -25,25 +26,32 @@ export async function discoveryHandler(ctx) {
   const location = payload.location || (await missions.locations(mission.id))[0];
   if (!location) throw err.discovery('NO_TARGET', 'The mission has no target location configured.');
 
-  const types = resolveBusinessTypes(
-    [mission.target_description, mission.investigation_notes, payload.hint].filter(Boolean).join(' ')
-  );
-  if (!types.length) {
+  const description = [mission.target_description, mission.investigation_notes, payload.hint]
+    .filter(Boolean).join(' ');
+  const types = resolveBusinessTypes(description);
+
+  // §11: which sources this mission uses is its own configuration. Overpass
+  // needs a tag mapping; the keyword source still works for a niche the type
+  // catalogue does not know, so an unmapped description is no longer fatal.
+  const sources = normaliseSourceIds(mission.discovery_sources);
+  if (!types.length && !description.trim()) {
     throw err.discovery(
       'DISCOVERY_NO_TYPE_MATCH',
-      'No business type matched this mission. Name the type to scout for, or configure a paid discovery provider.'
+      'This mission has nothing to search for. Describe the businesses you are looking for.'
     );
   }
 
   const limit = Math.min(payload.limit || mission.max_leads_per_run, 100);
-  // The discovery source is injectable so the pipeline can be exercised
-  // without a network round trip; the default is the real Overpass client.
-  const discover = services.discovery?.discover ?? discoverViaOverpass;
+  // The discovery layer is injectable so the pipeline can be exercised without
+  // a network round trip; the default is the real multi-source client.
+  const discover = services.discovery?.discover ?? discoverCandidates;
   const { candidates, source, area } = await discover({
     country: location.country,
     region: location.region,
     city: location.city,
     types,
+    keyword: description,
+    sources,
     limit,
   });
 

@@ -1,9 +1,9 @@
 # Nexora Outreach — Final Certification Report
 
-Generated 2026-10-08. Source of truth: `spec-reference/spec.txt`
-(`Nexora_Outreach_Full_Vision_and_Cline_Implementation_Instructions.docx`).
-Verification command: `npm test` → **180 passing / 0 failing**
-(79 unit + 101 end-to-end), exit code 0.
+Generated 2026-10-08, re-verified 2026-10-21. Source of truth:
+`Nexora_Outreach_Source_of_Truth_Vision.md` (374 lines, 41 sections).
+Verification command: `npm test` → **310 passing / 0 failing**
+(169 unit + 141 end-to-end), exit code 0.
 
 ---
 
@@ -147,24 +147,51 @@ Additional evidence:
 | Not unlimited sending | Per-mission daily limits + global ceiling |
 | No follow-ups after reply/opt-out | Conversation state + suppression halt follow-ups |
 | No secrets in frontend | Only CSRF token is exposed |
-| Verify backend, not buttons | 180 tests assert real behavior, not visuals |
+| Verify backend, not buttons | 310 tests assert real behavior, not visuals |
 
 ---
 
 ## H. Known limitations and residual risk
 
-1. **Live AI is wired.** OpenCode Cloud is connected and verified end to end; a
-   model the workspace has not enabled surfaces a clear, non-retried
-   `AI_MODEL_UNAVAILABLE` rather than looping.
+1. **OpenCode Cloud has no credits.** The runtime is connected and the catalog
+   is discovered live (84 models), but every permitted model answers
+   `AI_CREDITS_EXHAUSTED` until the workspace is topped up. The product fails
+   safely: the job fails permanently, the operator gets an `ai_error`
+   notification with the top-up guidance, and nothing is invented or sent.
 2. **Live OAuth is credential-gated.** The flow, scopes, refresh and encrypted
    storage are implemented and tested; a real client is needed to round-trip.
-3. **Frontend verification** is via static-serving tests and a live server smoke
-   run, not browser automation.
-4. **Overpass** rate-limits aggressively; use a dedicated instance in production.
-5. **Vercel Hobby** restricts cron granularity; use an external scheduler on Hobby.
+3. **Provider-side bounce/complaint pull.** Ingestion exists as an
+   authenticated endpoint (`POST /api/email/events`) and suppression is
+   applied, but nothing polls the provider for feedback — that is the
+   provider's inbound webhook and needs the mailbox credentials.
+4. **Research is HTTP, not a browser.** `research/fetcher.js` fetches pages
+   directly, honouring robots and rate limits. A JS-rendered headless browser
+   would be a new dependency and is not installed.
+5. **Overpass** rate-limits aggressively; use a dedicated instance in production.
+6. **Vercel Hobby** restricts cron granularity; use an external scheduler on Hobby.
 
 No claim in this report rests on visual appearance; every functional claim maps
 to a passing test, a verify script, or a live run.
+
+### Browser verification (was an open gap)
+
+The frontend is now verified in a real browser, not only by static tests.
+Headless Chrome is driven over the DevTools Protocol against a seeded account
+(missions, prospects, messages, replies, failed jobs) at **phone, tablet,
+laptop and desktop** widths, across every screen including the mission,
+prospect and thread detail views.
+
+* 46 captures, **0 horizontal overflows**, **0 text below 11px**.
+* `scripts/contrast-audit.js` checks every colour pair the design uses
+  against WCAG AA: 18 pairs, all ≥ 4.5:1.
+* The same audit runs against the deployed site, so the deployed build is
+  verified the same way as the local one.
+
+That audit is what found the defects this pass fixed: navigation icons
+rendered as `?`, the dashboard reporting "nothing needs you" while jobs were
+failing, an inbox that could not say which business a thread belonged to,
+reply text that was never stored, and raw machine values (stage names, window
+minutes, provider errors) shown to the reader.
 
 ---
 

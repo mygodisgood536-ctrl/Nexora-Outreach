@@ -102,6 +102,25 @@ Return JSON:
   "quality_score": integer 0-100
 }
 
+Cover the investigation checklist below. For each one, either cite the specific evidence that shows it, or record that the captured evidence does not show it — never imply you saw something the evidence does not contain:
+
+1. Mobile / responsive behaviour — viewport meta, viewport-friendly widths, the mobile screenshot and vitals when present.
+2. Visual hierarchy — heading counts (h1/h2/h3) and whether one clear h1 exists.
+3. Typography and spacing — font families declared in the markup and inline style blocks.
+4. Navigation clarity — number of nav elements, how many links each contains, internal link count.
+5. Homepage clarity — title, title length, meta description.
+6. Service / product presentation — aspects.servicePresentation traces and heading structure.
+7. Menu presentation, where the business has one — aspects.menu traces.
+8. Online ordering, where relevant — aspects.onlineOrdering traces.
+9. Reservation / booking, where relevant — aspects.reservations traces.
+10. Clear contact method — mailto addresses, tel numbers, contact forms.
+11. Calls to action — ctaLinkCount and the ctaSamples.
+12. Important business information — aspects.businessInformation traces, structured data.
+13. Broken links / pages, where detectable — linkIntegrity results.
+14. Obvious usability problems — missing alt text, no viewport, no contact route, thin text, form errors in markup.
+15. Outdated / incomplete design — generator, inline style blocks, external script count.
+16. Basic performance indicators — performance scores and vitals when captured.
+
 Every entry in "findings" MUST cite a specific string from the evidence above. Never describe a visual quality you cannot verify from the evidence (for example, do not claim a layout "looks dated"). If evidence is thin, return fewer findings.`,
   };
 }

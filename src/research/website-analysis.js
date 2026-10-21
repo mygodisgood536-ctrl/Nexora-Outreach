@@ -50,11 +50,53 @@ const CTA_TERMS = [
 ];
 
 /**
+ * Spec §12 names the aspects an investigation must cover. Some of them are
+ * industry-specific (a restaurant menu, online ordering, table reservations),
+ * so the page is scanned for the observable traces of each: a labelled link,
+ * a booking platform's name, an ordering widget. Only traces are recorded — the
+ * AI decides what they mean, and a business with none of them is not penalised.
+ */
+const ASPECT_TERMS = {
+  menu: ['menu', 'our-menu', 'food-menu', 'drinks', 'wine-list', '/menu'],
+  onlineOrdering: [
+    'order online', 'order now', 'start order', 'add to cart', 'checkout',
+    'doordash', 'ubereats', 'grubhub', 'seamless', 'toasttab', 'chownow', 'square ordering',
+  ],
+  reservations: [
+    'book a table', 'book now', 'reserve', 'reservation', 'reservations',
+    'opentable', 'resy', 'sevenrooms', 'bookatable', 'tock', 'yelp reservations',
+  ],
+  servicePresentation: [
+    'our services', 'services', 'what we do', 'treatments', 'our work', 'portfolio',
+    'specialties', 'menu of services', 'pricing', 'packages',
+  ],
+  businessInformation: [
+    'opening hours', 'hours', 'address', 'find us', 'location', 'about us',
+    'contact us', 'phone',
+  ],
+};
+
+/** Anchors and labels whose text or href matches any of the given terms. */
+function tracesFor(html, links, text, terms, { href = true } = {}) {
+  const found = [];
+  for (const term of terms) {
+    const inText = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(text);
+    const inHref = href && new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(html);
+    const link = links.find((l) => `${l.text} ${l.href}`.toLowerCase().includes(term.toLowerCase()));
+    if (inText || inHref || link) {
+      found.push({ term, link: link ? { text: link.text, href: link.href } : null });
+    }
+  }
+  return found.slice(0, 6);
+}
+
+/**
  * Build the evidence object persisted to `website_analyses.evidence`.
  * Every field is a measurement, not a judgement.
  */
 export function extractWebsiteEvidence(html, { url, bytes = null, contentType = '' } = {}) {
   const lower = html.toLowerCase();
+  const text = textOf(html);
   const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').trim();
   const description = metaContent(html, 'description');
   const generator = metaContent(html, 'generator');
@@ -119,10 +161,20 @@ export function extractWebsiteEvidence(html, { url, bytes = null, contentType = 
     fontFamilies,
     mailtoAddresses: mailto.slice(0, 5),
     telNumbers: tel.slice(0, 5),
-    visibleTextLength: textOf(html).length,
+    visibleTextLength: text.length,
     usesViewportFriendlyWidths: viewport && !/user-scalable\s*=\s*no/i.test(html),
     mentionsPrices: /[$€£]\s?\d|\bprice[sd]?\b|\bfrom \d/i.test(lower),
     hasStructuredData: /application\/ld\+json/i.test(html),
+    // §12 checklist coverage: what the page actually offers a visitor, as
+    // traces rather than conclusions. Absent traces are a fact too — they tell
+    // the AI the aspect was looked for and not found.
+    aspects: {
+      menu: tracesFor(html, links, text, ASPECT_TERMS.menu),
+      onlineOrdering: tracesFor(html, links, text, ASPECT_TERMS.onlineOrdering),
+      reservations: tracesFor(html, links, text, ASPECT_TERMS.reservations),
+      servicePresentation: tracesFor(html, links, text, ASPECT_TERMS.servicePresentation),
+      businessInformation: tracesFor(html, links, text, ASPECT_TERMS.businessInformation),
+    },
     // Honest statement of method so the AI never over-claims.
     analysisMethod: 'http_html_analysis_without_javascript_rendering',
   };

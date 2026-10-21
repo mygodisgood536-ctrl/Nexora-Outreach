@@ -360,8 +360,21 @@ export class ConversationService {
     return result.changes;
   }
 
-  async recordReply(conversationId, { providerMessageId = null, threadKey = null } = {}) {
+  async recordReply(conversationId, {
+    providerMessageId = null, threadKey = null, from = null, subject = null,
+    text = null, receivedAt = null,
+  } = {}) {
     const conversation = await this.getById(conversationId);
+    // Store what the prospect actually wrote. Recording only the fact of a
+    // reply would leave the user unable to read it, which is the entire point
+    // of monitoring the mailbox (spec §18).
+    await this.db.run(
+      `INSERT INTO inbound_messages
+         (conversation_id, lead_id, provider_message_id, from_address, from_name, subject, body_text, received_at)
+       VALUES (?,?,?,?,?,?,?, COALESCE(?, datetime('now')))`,
+      conversationId, conversation.lead_id, providerMessageId,
+      from ? String(from).trim() : null, null, subject || null, String(text || ''), receivedAt
+    );
     const cancelled = await this.cancelFollowUps(conversationId, 'prospect replied');
     await this.db.run(
       `UPDATE conversations
@@ -376,6 +389,37 @@ export class ConversationService {
       entityType: 'conversation', entityId: conversationId, detail: { cancelledFollowUps: cancelled },
     });
     return { conversation: await this.getById(conversationId), cancelledFollowUps: cancelled };
+  }
+
+  /**
+   * Attach the AI's reading of a reply to the message it came from. Triage runs
+   * after the reply is already stored, and it must never block storing it.
+   */
+  async recordTriage(conversationId, providerMessageId, { intent = null, summary = null } = {}) {
+    if (!providerMessageId) return 0;
+    const result = await this.db.run(
+      `UPDATE inbound_messages SET intent = ?, triage_summary = ?
+        WHERE conversation_id = ? AND provider_message_id = ?`,
+      intent, summary, conversationId, providerMessageId
+    );
+    return result.changes;
+  }
+
+  /** Everything said in a thread, oldest first, with replies inline. */
+  async threadFor(conversationId) {
+    const outbound = await this.db.all(
+      'SELECT * FROM outreach_messages WHERE conversation_id = ? ORDER BY id ASC', conversationId
+    );
+    const inbound = await this.db.all(
+      'SELECT * FROM inbound_messages WHERE conversation_id = ? ORDER BY id ASC', conversationId
+    );
+    const merged = [
+      ...outbound.map((m) => ({ ...m, direction: 'outbound' })),
+      ...inbound.map((m) => ({ ...m, direction: 'inbound', kind: 'reply', send_status: 'received' })),
+    ];
+    // Outbound first by send time, inbound by receipt time. `created_at` is a
+    // text timestamp in both dialects, so a string sort is chronological.
+    return merged.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
   }
 
   async recordOptOut(conversationId, email) {
@@ -394,6 +438,43 @@ export class ConversationService {
       );
     }
     return this.db.all('SELECT * FROM conversations WHERE user_id = ? ORDER BY id DESC LIMIT ?', userId, limit);
+  }
+
+  /**
+   * The inbox list, with the context a person actually needs to recognise a
+   * thread: which business it is, which mission sent it, and the last thing
+   * that was said. Without this the list can only show "Conversation #12",
+   * which tells the user nothing they can act on.
+   */
+  async listForUserWithContext(userId, { status = null, limit = 50 } = {}) {
+    const where = status ? 'AND c.status = ?' : '';
+    const params = status ? [userId, status, limit] : [userId, limit];
+    return this.db.all(
+      `SELECT c.*,
+              l.business_name, l.city, l.region, l.country, l.contact_route,
+              m.name AS mission_name,
+              last.subject AS last_subject,
+              last.body_text AS last_body,
+              last.kind AS last_kind,
+              last.send_status AS last_send_status,
+              inbound.body_text AS inbound_body,
+              inbound.received_at AS inbound_at
+         FROM conversations c
+         LEFT JOIN leads l ON l.id = c.lead_id
+         LEFT JOIN missions m ON m.id = c.mission_id
+         LEFT JOIN outreach_messages last ON last.id = (
+               SELECT om.id FROM outreach_messages om
+                WHERE om.conversation_id = c.id
+                ORDER BY om.id DESC LIMIT 1)
+         LEFT JOIN inbound_messages inbound ON inbound.id = (
+               SELECT im.id FROM inbound_messages im
+                WHERE im.conversation_id = c.id
+                ORDER BY im.id DESC LIMIT 1)
+        WHERE c.user_id = ? ${where}
+        ORDER BY c.updated_at DESC, c.id DESC
+        LIMIT ?`,
+      ...params
+    );
   }
 }
 

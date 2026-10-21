@@ -49,6 +49,7 @@ export async function mailboxMonitorHandler(ctx) {
 
     await conversations.recordReply(conversation.id, {
       providerMessageId: reply.providerMessageId, threadKey: reply.threadKey,
+      from: reply.from, subject: reply.subject, text: reply.text, receivedAt: reply.receivedAt,
     });
     await leads.setStatus(lead.id, 'replied');
 
@@ -60,6 +61,9 @@ export async function mailboxMonitorHandler(ctx) {
         replyText: reply.text,
       });
       summary = triage.summary || summary;
+      await conversations.recordTriage(conversation.id, reply.providerMessageId, {
+        intent: triage.intent || null, summary: triage.summary || null,
+      });
       if (triage.is_opt_out) await conversations.recordOptOut(conversation.id, fromEmail);
     } catch {
       // A triage failure must never block the reply notification.

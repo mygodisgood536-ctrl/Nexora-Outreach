@@ -2,6 +2,7 @@ import { err, describeFailure } from '../../core/errors.js';
 import { requireUser } from '../middleware.js';
 import { STAGE } from '../../workers/queue.js';
 import { enforceRateLimit } from '../../services/rate-limit.js';
+import { DISCOVERY_SOURCES, DEFAULT_DISCOVERY_SOURCES } from '../../discovery/sources.js';
 
 /**
  * Attach the operator-facing failure explanation (spec §30) to a job row. A job
@@ -35,6 +36,19 @@ export function registerWorkspaceRoutes(router, system) {
     });
   });
 
+  /**
+   * §11 — the permitted discovery sources a mission may choose from. The
+   * catalogue is served by the backend so the frontend never hard-codes it.
+   */
+  router.get('/api/discovery/sources', (ctx) => {
+    requireUser(ctx);
+    ctx.json(200, {
+      sources: DISCOVERY_SOURCES.map(({ id, label, description, requiresKey }) =>
+        ({ id, label, description, requiresKey })),
+      defaults: [...DEFAULT_DISCOVERY_SOURCES],
+    });
+  });
+
   router.post('/api/missions', async (ctx) => {
     const user = requireUser(ctx);
     const body = await ctx.body();
@@ -58,6 +72,7 @@ export function registerWorkspaceRoutes(router, system) {
       campaign_end_at: body.campaignEndAt ?? null,
       windows: body.windows,
       locations: body.locations,
+      discovery_sources: body.discoverySources,
     });
     ctx.json(201, { mission: await missions.toPublic(mission) });
   });
@@ -112,6 +127,7 @@ export function registerWorkspaceRoutes(router, system) {
       campaign_end_at: body.campaignEndAt,
       windows: body.windows,
       locations: body.locations,
+      discovery_sources: body.discoverySources,
     });
     ctx.json(200, { mission: await missions.toPublic(mission) });
   });
@@ -206,7 +222,7 @@ export function registerWorkspaceRoutes(router, system) {
     const user = requireUser(ctx);
     const lead = await leads.getForUser(toId(ctx.params.id), user.id);
     const conversation = (await conversations.getFor(lead.id, lead.mission_id)) || null;
-    const messages = conversation ? await conversations.messagesFor(conversation.id) : [];
+    const messages = conversation ? await conversations.threadFor(conversation.id) : [];
     ctx.json(200, {
       lead: leads.toPublic(lead),
       websiteAnalysis: await leads.websiteAnalysis(lead.id),
@@ -267,7 +283,7 @@ export function registerWorkspaceRoutes(router, system) {
   // ── Conversations (spec §18) ───────────────────────────────────
   router.get('/api/conversations', async (ctx) => {
     const user = requireUser(ctx);
-    const rows = await conversations.listForUser(user.id, {
+    const rows = await conversations.listForUserWithContext(user.id, {
       status: ctx.query.status || null,
       limit: Math.min(Number(ctx.query.limit) || 50, 200),
     });
@@ -281,7 +297,7 @@ export function registerWorkspaceRoutes(router, system) {
     if (!conversation || conversation.user_id !== user.id) throw err.notFound('Conversation');
     ctx.json(200, {
       conversation,
-      messages: await conversations.messagesFor(conversation.id),
+      messages: await conversations.threadFor(conversation.id),
       lead: leads.toPublic(await leads.get(conversation.lead_id)),
     });
   });

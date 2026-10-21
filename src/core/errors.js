@@ -266,7 +266,9 @@ export function describeFailure(code, { kind = null, retryable = null } = {}) {
       || String(code).replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase()),
     detail: guidance.detail
       || userFacingMessage(new AppError(code, ''))
-      || `The step failed (${code}).`,
+      // Never leak the machine code into the sentence the user reads; the
+      // title already says what happened in plain words.
+      || 'The step could not be completed.',
     action: guidance.action || (isRetryable
       ? 'This will be retried automatically.'
       : 'Resolve the cause, then retry the job.'),

@@ -35,7 +35,7 @@ const sendAgain = (system, user, mission, lead, message, tag) => system.queue.en
   idempotencyKey: `email:${tag}:${message.id}`,
 });
 
-// â”€â”€ Suppression and limits (spec Â§17, Â§29) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Suppression and limits (spec §17, §29) ────────────────────────
 
 test('policy: a suppressed recipient is never contacted', async () => {
   const { db, system, email } = await setup();
@@ -92,7 +92,7 @@ test('policy: an expired mailbox stops sending and notifies the user', async () 
   assert.ok(note, 'the user is told to reconnect their mailbox');
   assert.equal(note.severity, 'critical');
 });
-// â”€â”€ Reply monitoring (spec Â§18) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Reply monitoring (spec §18) ───────────────────────────────────
 
 test('policy: a reply notifies the user and cancels pending follow-ups', async () => {
   const { db, system, email } = await setup();
@@ -159,7 +159,7 @@ test('policy: an opt-out reply suppresses the address permanently', async () => 
   assert.ok(await system.suppression.isSuppressed(user.id, { email: 'hello@abcrestaurant.com' }),
     'the opt-out is recorded as suppression');
 });
-// â”€â”€ Follow-ups (spec Â§19) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Follow-ups (spec §19) ─────────────────────────────────────────
 
 test('policy: a follow-up is not sent before the configured delay', async () => {
   const { db, system, email } = await setup();
@@ -215,7 +215,7 @@ test('policy: a due follow-up is sent and reschedules only up to the maximum', a
   assert.equal(email.sent.length, 3, 'the second follow-up was sent');
 
   await runFollowUp();
-  assert.equal(email.sent.length, 3, 'max_follow_ups is respected â€” no third follow-up');
+  assert.equal(email.sent.length, 3, 'max_follow_ups is respected — no third follow-up');
   assert.equal(
     (await db.all("SELECT * FROM follow_ups WHERE conversation_id = ? AND status = 'pending'", conversation.id)).length,
     0, 'nothing further is scheduled at the limit'

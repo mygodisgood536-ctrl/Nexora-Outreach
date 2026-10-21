@@ -19,7 +19,7 @@ const start = (system, user, mission) => system.queue.enqueue({
   payload: { location: { country: 'US', city: 'Austin' } },
 });
 
-// â”€â”€ Failure handling (spec Â§30) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Failure handling (spec §30) ───────────────────────────────────
 
 test('lifecycle: a transient failure retries and then succeeds', async () => {
   let attempts = 0;
@@ -110,7 +110,7 @@ test('lifecycle: a handler that is not registered fails permanently', async () =
   assert.match(job.last_error, /No handler registered/);
 });
 
-// â”€â”€ Pause, resume, stop (spec Â§26) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Pause, resume, stop (spec §26) ────────────────────────────────
 
 test('lifecycle: a paused mission does not execute queued work', async () => {
   const { db, system } = await setup();

@@ -59,7 +59,7 @@ test('scheduler: the mission timezone, not the server, decides (spec 10)', async
   assert.equal((await system.scheduler.dueMissions(MONDAY(12))).length, 0, '12:00 UTC is 13:00 Lagos');
   assert.equal((await system.scheduler.dueMissions(MONDAY(13))).length, 1, '13:00 UTC is 14:00 Lagos');
   assert.equal((await system.scheduler.dueMissions(MONDAY(16, 59))).length, 1, '16:59 UTC is 17:59 Lagos');
-  assert.equal((await system.scheduler.dueMissions(MONDAY(17))).length, 0, '17:00 UTC is 18:00 Lagos â€” window end is exclusive');
+  assert.equal((await system.scheduler.dueMissions(MONDAY(17))).length, 0, '17:00 UTC is 18:00 Lagos — window end is exclusive');
   assert.equal((await system.scheduler.dueMissions(MONDAY(18))).length, 0, '18:00 UTC is 19:00 Lagos');
 });
 

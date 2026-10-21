@@ -84,8 +84,8 @@ export async function createTestSystem(options = {}) {
 }
 
 /**
- * Boot the REAL application entry point (src/app.js) â€” API, scheduler and
- * worker together â€” against an in-memory database, so `npm start`'s real
+ * Boot the REAL application entry point (src/app.js) — API, scheduler and
+ * worker together — against an in-memory database, so `npm start`'s real
  * startup and shutdown paths are covered rather than assumed.
  */
 export async function startTestApp() {

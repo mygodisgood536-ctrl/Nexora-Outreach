@@ -13,12 +13,12 @@ Legend: **Done** = implemented and covered by tests · **Partial** = present but
 | 5.2 | Login uses username + security question/answer; answer never in plain text | `security_credentials` (`scrypt` hash), `account.js` login | Done |
 | 5.3 | Security: validation, rate limiting + lockout, expiring/revocable sessions, encrypted tokens, recovery, audit | `account.js` (attempts/lockout/sessions/recovery), `email_connections` tokens encrypted, `audit_events`; covered by `test/unit/auth.test.js` | Done |
 | 6 | Mailbox connection: send/receive/monitor/pause/disconnect/status; provider abstraction | `email-store.js`, `account.js` provider routes (`google`, `microsoft`, `resend`); `api-platform.test.js` + `journey.test.js` | Done |
-| 7 | OpenCode is the central AI runtime; provider/model discovery from OpenCode | `src/ai/opencode-adapter.js`, `ai_settings`, `ai_call_log` | Done |
+| 7 | OpenCode is the central AI runtime; provider/model discovery from OpenCode | `src/ai/runtime.js`, `src/ai/cloud-transport.js`, `ai_settings`, `ai_call_log` | Done — 84 models discovered live from OpenCode Cloud; **execution returns `AI_CREDITS_EXHAUSTED`** (external blocker) |
 | 8 | Missions: multiple missions, all mission settings, NL→structured shown for review | `missions.js`, `workspace.js` (`/interpret`, `/activate`), `interpreted_json` | Done |
 | 9 | Country targeting: countries/cities, real ISO countries, priorities | `target_locations` table | Done |
 | 10 | Scouting hours: days, multiple windows, timezone, next window, auto-start, pauses, recovery | `mission_windows`, scheduler, `automation_paused` | Done |
-| 11 | Discovery: permitted/authorized sources, configurable | `handlers-discovery.js`, `overpass.js` | Done |
-| 12 | Website investigation: responsive/typography/nav/etc., concrete evidence | `research/website-analysis.js`, `audits`, `audit_evidence` | Done |
+| 11 | Discovery: permitted/authorized sources, configurable per mission | `discovery/sources.js` (registry, merge, dedupe), `overpass.js`, `nominatim.js`, `missions.discovery_sources`, `GET /api/discovery/sources` | Done |
+| 12 | Website investigation: responsive/typography/nav/etc., concrete evidence | `research/website-analysis.js` (incl. §12 aspect traces), `ai/prompts.js` (16-point checklist), `audits`, `audit_evidence` | Done |
 | 13 | No-website businesses are investigated; public info only, never invented | `presence_analyses`, `leads.email_public`/`phone_public` | Done |
 | 14 | Qualification: why/relevance/confidence/contact route/suppression, no repeat contact | `qualifications` table, dedupe index | Done |
 | 15 | Personalized outreach: individualized per prospect, user instructions, no fake personalization | `handlers-outreach.js` | Done |
@@ -42,7 +42,7 @@ Legend: **Done** = implemented and covered by tests · **Partial** = present but
 | 33 | Changing the service changes behavior (no website-specific rules) | `missions.service` enum (`api-data.test.js`) | Done |
 | 34 | Changing geography changes behavior (country filtering) | `target_locations` (`api-data.test.js`) | Done |
 | 35 | Changing schedule (multiple windows/timezone) honored by scheduler | `mission_windows`, scheduler; `scheduler.test.js` ("editing a mission schedule changes what fires, without a manual start") + timezone tests | Done |
-| 36 | UX: responsive, clear running/paused states, visible autonomous activity, pause controls, logs secondary | `public/` (redesigned, responsive), Activity view; held by `test/e2e/ux-contract.test.js` | Done (markup/CSS verified; pixel rendering at each size still needs a browser) |
+| 36 | UX: responsive, clear running/paused states, visible autonomous activity, pause controls, logs secondary | `public/` (redesigned, responsive), Activity view; held by `test/e2e/ux-contract.test.js`; **verified in headless Chrome at phone/tablet/laptop/desktop** (46 captures, 0 overflow, 0 text < 11px) | Done |
 | 37 | Navigation: Dashboard/Missions/Leads/Conversations/Email/Activity/Notifications/Settings | `public/app.js` `NAV` — all eight areas are routed and rendered (`activity.test` assertions in `ux-contract.test.js`) | Done |
 | 38 | MUST NOTs: no mocks, no hard-coded provider lists, no frontend-only AI, no manual start, no niche/country hard-coding, no generic template, no guaranteed inbox placement, no invented contacts, no anti-bot bypass, no infinite sending, no follow-up after reply/opt-out, no secrets in frontend, verify real behavior | enforced across services/tests | Done |
 | 39 | Implementation order followed (foundations → … → UI → tests) | commit history matches order | Done |
@@ -50,12 +50,20 @@ Legend: **Done** = implemented and covered by tests · **Partial** = present but
 | 41 | Source of truth honored; real system, not a prototype | whole implementation | Done |
 
 ## Open gaps (external or explicitly deferred)
-1. §17: bounce/complaint ingestion exists as an authenticated + webhook endpoint (`POST /api/email/events`) and suppression is applied, but nothing *pulls* provider feedback: that is the provider's inbound webhook, which needs the mailbox credentials to be configured.
-2. §24: `research/fetcher.js` performs a real HTTP fetch (robots-aware link checks, PageSpeed capture) rather than driving a browser. A JS-rendered headless browser would be a new dependency and is not installed.
-3. §36: the layout is responsive by CSS (breakpoints, reduced motion) and covered by `static` asset tests, but confirming the rendering at phone/tablet/desktop sizes needs a real browser, which is not available here.
+1. **OpenCode Cloud has no credits** — every permitted model answers `AI_CREDITS_EXHAUSTED`. Discovery/selection/diagnostics work (84 models, live); AI execution needs credits on the workspace. The product fails safely: the job fails permanently, the user gets an `ai_error` notification with the top-up guidance, and nothing is invented or sent.
+2. §17: bounce/complaint ingestion exists as an authenticated + webhook endpoint (`POST /api/email/events`) and suppression is applied, but nothing *pulls* provider feedback: that is the provider's inbound webhook, which needs the mailbox credentials to be configured.
+3. §24: `research/fetcher.js` performs a real HTTP fetch (robots-aware link checks, PageSpeed capture) rather than driving a browser. A JS-rendered headless browser would be a new dependency and is not installed.
+4. Nominatim is TCP-blocked from the development machine's network (Overpass is not), so the second discovery source's live reachability can only be confirmed from the deployment. Its failure path is proven live: the pass continues on the remaining source.
 
 ## Closed since the first pass
 - §22 retention: `missions.purgeArchived` + scheduler pass + `purged_at` column, shipped to existing databases through `SCHEMA_VERSION` 8 and both dialect upgrade lists.
 - §31/§33/§34: confirmed covered by explicit tests rather than left as "missing".
 - §32/§3: `test/e2e/journey.test.js` now walks sign-up → mailbox → mission → auto-start scouting → send → reply → pause/resume → restart recovery in one run.
 - §36/§37: the SPA gained the missing Email and Activity screens, and `test/e2e/ux-contract.test.js` now fails if a destination, an autonomy control, a state tone, a responsive breakpoint or the "no secrets in the browser" rule regresses.
+- §11: a source registry with two permitted sources, merged and de-duplicated, configured per mission (`discovery_sources`, `GET /api/discovery/sources`); word-boundary business-type matching so "bookshops" no longer resolves to the generic "shops" tag; an unmapped niche now produces a keyword query instead of failing the mission.
+- §12: evidence traces for menu, online ordering, reservations, service presentation and business information, plus an explicit 16-point checklist in the analysis prompt.
+- §18/§21: the reply **text** is now stored (`inbound_messages`, `SCHEMA_VERSION` 10) and shown in the inbox preview, the thread view and the prospect view. Before this, only the fact of a reply was recorded, so a user could never read what a prospect had written.
+- §20: the dashboard read a key the API never sent (`dash.attention` instead of `dash.itemsRequiringAttention`), so "Needs attention" always said nothing was wrong even with failed jobs. The contract now matches, and the panel lists each item with the way to fix it.
+- §36: verified in a real browser (headless Chrome over CDP) at phone, tablet, laptop and desktop widths across every screen — including the mission, prospect and thread detail views — with a seeded account. The automated pass reports no horizontal overflow and no text below 11px; `scripts/contrast-audit.js` checks every colour pair against WCAG AA (4.5:1).
+- Encoding damage: commit `e10ecf0` had written the navigation icons as `?` and a later pass had mangled the section signs and em dashes across the source, the schema comments and the test titles. All of it is repaired, and the icons are now inline SVG so a missing glyph can never blank the navigation again.
+- Verification tooling: `npm run migrate`, `scripts/probe-opencode.js` and `scripts/probe-discovery.js` all worked only after fixing missing `await`s, a missing `migrate()` call and SQLite-only code in the migrate script.

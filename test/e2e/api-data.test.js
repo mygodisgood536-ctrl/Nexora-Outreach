@@ -42,9 +42,9 @@ async function signedIn(base, username = 'ada') {
   return c;
 }
 
-// â”€â”€ Â§33 Changing the service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── §33 Changing the service ──────────────────────────────────────
 
-test('Â§33 api: changing the service changes scouting instead of reusing website rules', async () => {
+test('§33 api: changing the service changes scouting instead of reusing website rules', async () => {
   await withServer(async ({ system, base, discovery }) => {
     const c = await signedIn(base);
     const { body } = await c.post('/api/missions', MISSION);
@@ -72,7 +72,7 @@ test('Â§33 api: changing the service changes scouting instead of reusing websi
     await c.post(`/api/missions/${id}/run-now`, {});
     await system.worker.drain();
 
-    // The next run scouts the NEW type â€” website-specific rules are not reused.
+    // The next run scouts the NEW type — website-specific rules are not reused.
     assert.deepEqual(discovery.calls.at(-1).types, ['dentist']);
     assert.ok(!discovery.calls.some((x) => x.types.includes('restaurant') && x === discovery.calls.at(-1)));
 
@@ -84,9 +84,9 @@ test('Â§33 api: changing the service changes scouting instead of reusing websi
   });
 });
 
-// â”€â”€ Â§34 Changing geography â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── §34 Changing geography ────────────────────────────────────────
 
-test('Â§34 api: USA only, then USA + Germany + Spain + Italy, filters and labels leads', async () => {
+test('§34 api: USA only, then USA + Germany + Spain + Italy, filters and labels leads', async () => {
   await withServer(async ({ system, base, discovery }) => {
     const c = await signedIn(base);
     const { body } = await c.post('/api/missions', MISSION);
@@ -94,7 +94,7 @@ test('Â§34 api: USA only, then USA + Germany + Spain + Italy, filters and labe
     await c.post(`/api/missions/${id}/activate`, {});
     await connectMailbox(system.db, 1);
 
-    // Phase 1 â€” USA only.
+    // Phase 1 — USA only.
     await c.post(`/api/missions/${id}/run-now`, {});
     await system.worker.drain();
     assert.equal(discovery.calls.length, 1);
@@ -106,7 +106,7 @@ test('Â§34 api: USA only, then USA + Germany + Spain + Italy, filters and labe
     assert.equal(usaLeads[0].country, 'US', 'the lead carries its country');
     assert.equal(usaLeads[0].city, 'Austin');
 
-    // Phase 2 â€” widen to four countries by editing the mission's locations.
+    // Phase 2 — widen to four countries by editing the mission's locations.
     const widened = await c.patch(`/api/missions/${id}`, {
       locations: [
         { country: 'US', city: 'Austin', priority: 'high' },
@@ -152,7 +152,7 @@ test('Â§34 api: USA only, then USA + Germany + Spain + Italy, filters and labe
   });
 });
 
-// â”€â”€ Missions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Missions ─────────────────────────────────────────────────────
 
 test('api: missions can be created, read, updated and deleted', async () => {
   await withServer(async ({ base }) => {
@@ -186,7 +186,7 @@ test('api: mission creation validates its configuration', async () => {
     assert.equal((await c.post('/api/missions', { name: '' })).status, 422);
     assert.equal((await c.post('/api/missions', { name: 'X', timezone: 'Mars/Phobos' })).status, 422);
     assert.equal((await c.post('/api/missions', { name: 'X', sendingMode: 'nonsense' })).status, 422);
-    // Spec Â§9: a vague geography is rejected.
+    // Spec §9: a vague geography is rejected.
     const geo = await c.post('/api/missions', { ...MISSION, locations: [{ country: 'Middle East' }] });
     assert.equal(geo.status, 422);
     assert.match(geo.body.message, /ISO country code/);
@@ -244,7 +244,7 @@ test('api: run-now enqueues through the real queue, not a direct handler call', 
   });
 });
 
-// â”€â”€ Cross-user authorization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Cross-user authorization ──────────────────────────────────────
 
 test('api: one user cannot read or change another user\'s mission', async () => {
   await withServer(async ({ base }) => {

@@ -15,7 +15,7 @@ async function signedIn(base) {
   return c;
 }
 
-// â”€â”€ AI settings (spec Â§7 / Â§31) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── AI settings (spec §7 / §31) ───────────────────────────────────
 
 test('api: AI settings expose the runtime catalog, not a hard-coded list', async () => {
   await withServer(async ({ base }) => {
@@ -56,7 +56,7 @@ test('api: AI diagnostics do not leak credentials', async () => {
   });
 });
 
-// â”€â”€ Email connections (spec Â§6) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Email connections (spec §6) ──────────────────────────────────
 
 test('api: email connections report provider availability without secrets', async () => {
   await withServer(async ({ base }) => {
@@ -200,7 +200,7 @@ test('api: the redirect URI is derived from the configured public base URL', asy
   });
 });
 
-// â”€â”€ Protocol behaviour â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Protocol behaviour ───────────────────────────────────────────
 
 test('api: unknown routes 404, wrong methods 405, bad ids 422', async () => {
   await withServer(async ({ base }) => {

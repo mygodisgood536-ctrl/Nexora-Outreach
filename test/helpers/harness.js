@@ -9,8 +9,8 @@ import { STAGE } from '../../src/workers/queue.js';
  * Harness for the worker lifecycle tests.
  *
  * The pipeline, queue, state machine, suppression, idempotency, limits and
- * follow-up logic are all REAL. Only the outbound boundaries are replaced â€” AI
- * transport, email transport and outbound HTTP/discovery â€” so tests are
+ * follow-up logic are all REAL. Only the outbound boundaries are replaced — AI
+ * transport, email transport and outbound HTTP/discovery — so tests are
  * deterministic and offline.
  *
  * The AI stub sits BELOW `AITasks`, so every response still passes through the
@@ -107,7 +107,7 @@ export function makeFakeAI(overrides = {}) {
       const found = catalog.find((m) => m.id === model);
       if (!found) {
         // A model the installed runtime does not offer is a user input error,
-        // not a provider outage â€” the spec calls for a clear rejection.
+        // not a provider outage — the spec calls for a clear rejection.
         throw err.validation(`"${model}" is not offered by the installed OpenCode runtime.`);
       }
       base.selected = found.id;
@@ -133,7 +133,7 @@ export function makeFakeEmail(db = null) {
         state.failNext = null;
         // Tests choose the taxonomy; defaults mirror the real send failure.
         // `retryable` is a getter derived from the code, so it must not be
-        // assigned â€” the code alone decides retry vs permanent.
+        // assigned — the code alone decides retry vs permanent.
         const error = new AppError(e.code || 'SEND_FAILED', e.message || 'send failed', {
           kind: e.kind || ERROR_KIND.EMAIL,
           status: e.status || 502,
@@ -193,7 +193,7 @@ export function makeFakeEmail(db = null) {
   const db_connections = new Map();
   const issuedStates = new Map();
   // Tests run without OAuth client credentials, so nothing is configured by
-  // default â€” exactly like a fresh deployment.
+  // default — exactly like a fresh deployment.
   const unconfigured = new Set(['google', 'microsoft']);
   email.issuedStates = issuedStates;
   email.configure = (id) => unconfigured.delete(id);
@@ -218,7 +218,7 @@ export function makeFakeEmail(db = null) {
       userId, provider, accountEmail,
     );
   };
-  // â”€â”€ OAuth, so the connect/callback route pair is exercised for real â”€â”€
+  // ── OAuth, so the connect/callback route pair is exercised for real ──
   email.beginAuth = async (userId, providerId) => {
     if (!['google', 'microsoft'].includes(providerId)) {
       throw err.email('PROVIDER_UNSUPPORTED', `No email provider named "${providerId}".`);

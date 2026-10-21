@@ -17,7 +17,7 @@ const runDiscovery = (system, user, mission) => system.queue.enqueue({
   payload: { location: { country: 'US', city: 'Austin' } },
 });
 
-// â”€â”€ Happy path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Happy path ─────────────────────────────────────────────────────
 
 test('pipeline: a mission runs discovery -> research -> analysis -> qualification -> outreach -> send', async () => {
   const { db, system, email, ai } = await setup();

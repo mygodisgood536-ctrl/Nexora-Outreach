@@ -48,7 +48,7 @@ async function runPipeline(system, base, { sendingMode = 'autopilot' } = {}) {
   const lead = (await system.leads.list(1))[0];
   return { c, missionId, lead };
 }
-// â”€â”€ GAP-1: reject a drafted message (spec 21 user actions, 27) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── GAP-1: reject a drafted message (spec 21 user actions, 27) ─────────
 
 test('api: rejecting a draft marks it rejected and records the reason', async () => {
   await withServer(async ({ system, base }) => {
@@ -140,7 +140,7 @@ test('api: one user cannot read another user\'s lead detail', async () => {
   });
 });
 
-// â”€â”€ GAP-3: the dashboard reports every element of spec 20 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── GAP-3: the dashboard reports every element of spec 20 ───────────────
 
 test('api: the dashboard reports websites analyzed, messages, state and attention', async () => {
   await withServer(async ({ system, base }) => {
@@ -192,7 +192,7 @@ test('api: dashboard counts are isolated per user', async () => {
   });
 });
 
-// â”€â”€ GAP-4: re-issue a recovery code while signed in (spec 5.3) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── GAP-4: re-issue a recovery code while signed in (spec 5.3) ─────────
 
 test('api: a new recovery code can be issued and the old one stops working', async () => {
   await withServer(async ({ system, base }) => {

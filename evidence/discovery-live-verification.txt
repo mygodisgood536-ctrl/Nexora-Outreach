@@ -1,0 +1,28 @@
+live discovery probe 2026-10-17T08:01:06.544Z
+--- type resolution (Overpass tag mapping) ---
+restaurants -> restaurant
+dentists -> dentist
+unknown niche -> 0 types
+keyword query for unknown niche: independent bookshops tired websites Portland, US
+overpass query sample:
+[out:json][timeout:60];
+area["name"="Austin"]["boundary"="administrative"]->.searchArea;
+(
+    nwr["amenity"="restaurant"](area.searchArea);
+);
+out center 5;
+--- configured sources ---
+overpass: OpenStreetMap Overpass — Finds every business tagged with the mission’s types inside the target area.
+nominatim: OpenStreetMap Nominatim — Searches businesses by name and description, with the contact details OpenStreetMap records.
+--- live discovery: businesses in Austin, TX, US ---
+sources used=overpass area=Austin candidates=12
+  La Palapa | website=- | email=- | phone=- | https://www.openstreetmap.org/node/358532482
+  Pappasitos | website=- | email=- | phone=- | https://www.openstreetmap.org/node/359344991
+  Chinatown | website=- | email=- | phone=- | https://www.openstreetmap.org/node/432202995
+  Galaxy Cafe | website=https://www.galaxycafeaustin.com/ | email=- | phone=- | https://www.openstreetmap.org/node/457485574
+  Giovanni Pizza Stand | website=- | email=- | phone=- | https://www.openstreetmap.org/node/472241665
+  El Alma South (Westgate) | website=https://www.elalmacafe.com/ | email=- | phone=+1-512-351-8010 | https://www.openstreetmap.org/node/472242214
+  Sap's Fine Thai Cuisine | website=- | email=- | phone=- | https://www.openstreetmap.org/node/472243051
+  The Omelettry | website=http://www.theomelettry.com | email=info@theomelettry.com | phone=+1-512-453-5062 | https://www.openstreetmap.org/node/530780552
+candidates with a website: 5/12
+DISCOVERY_RESULT=PASS

@@ -148,6 +148,32 @@ test('§32 journey: sign-up to autonomous outreach, reply monitoring and recover
       `the reply is announced (kinds: ${notes.map((n) => n.kind).join(', ')})`,
     );
 
+    // §18 the user must be able to read what the prospect wrote, not merely
+    // that a reply exists: the text is kept with the thread and shown in it.
+    const thread = await system.conversations.threadFor(conversation.id);
+    const inbound = thread.filter((m) => m.direction === 'inbound');
+    assert.equal(inbound.length, 1, 'the reply is part of the thread');
+    assert.equal(inbound[0].body_text, 'Yes please — send me the details of the redesign.');
+    assert.ok(inbound[0].intent, 'the AI reading of the reply is attached to it');
+
+    const inbox = await c.get('/api/conversations');
+    const listed = inbox.body.conversations.find((x) => x.id === conversation.id);
+    assert.equal(listed.business_name, lead.business_name, 'the inbox names the business');
+    assert.equal(listed.inbound_body, inbound[0].body_text, 'the inbox previews the reply itself');
+    const opened = await c.get(`/api/conversations/${conversation.id}`);
+    assert.ok(
+      opened.body.messages.some((m) => m.direction === 'inbound' && m.body_text.includes('send me the details')),
+      'the conversation view returns the reply text',
+    );
+
+    // The prospect view shows the same thread, so the reply is readable where
+    // the operator is actually looking at the business.
+    const prospect = await c.get(`/api/leads/${lead.id}`);
+    assert.ok(
+      prospect.body.messages.some((m) => m.direction === 'inbound' && m.body_text.includes('send me the details')),
+      'the prospect view shows the reply text as well',
+    );
+
     // §19/§38 no further follow-up after a reply.
     const afterReply = await db.all("SELECT * FROM follow_ups WHERE status = 'pending'");
     assert.equal(afterReply.length, 0, 'the pending follow-up was cancelled by the reply');

@@ -409,7 +409,7 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible {
 .brand-mark { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .brand-mark img { width: 44px; height: 44px; border-radius: 12px; }
 .brand-mark .word { font-family: var(--display); font-size: 20px; line-height: 1.05; }
-.brand-mark .word small { display: block; font: 500 10px var(--mono); letter-spacing: 0.3em; text-transform: uppercase; color: var(--faint); }
+.brand-mark .word small { display: block; font: 500 11px var(--mono); letter-spacing: 0.24em; text-transform: uppercase; color: var(--muted); }
 
 .tabs {
   display: flex; gap: 4px; padding: 4px; margin-bottom: 18px;

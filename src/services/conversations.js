@@ -323,9 +323,18 @@ export class ConversationService {
     );
     if (existing) return { followUp: existing, created: false };
 
-    if (mission.max_follow_ups <= 0) return null;
     const conversation = await this.getById(conversationId);
-    if (conversation.followups_sent >= mission.max_follow_ups) return null;
+    if (mission.max_follow_ups <= 0) {
+      // The user asked for no follow-ups, so the thread is answered or
+      // deliberately left alone. Say so plainly (spec 18).
+      await this.setStatus(conversationId, 'no_reply');
+      return null;
+    }
+    if (conversation.followups_sent >= mission.max_follow_ups) {
+      // Every allowed follow-up has gone out and none was answered.
+      await this.setStatus(conversationId, 'no_reply');
+      return null;
+    }
 
     const sequence = conversation.followups_sent + 1;
     const dueAt = sqliteUtc(addDays(new Date(), mission.follow_up_delay_days));
@@ -337,6 +346,18 @@ export class ConversationService {
     const id = result.lastInsertRowid;
     await this.setStatus(conversationId, 'follow_up_scheduled');
     return { followUp: await this.followUp(id), created: true };
+  }
+
+  /**
+   * Close a thread on the operator's request (spec 18 "Closed"). Any pending
+   * follow-up is cancelled, so closing can never lead to another message.
+   */
+  async closeConversation(conversationId, reason = 'closed by the user') {
+    const conversation = await this.getById(conversationId);
+    if (!conversation) return null;
+    await this.cancelFollowUps(conversationId, reason);
+    await this.setStatus(conversationId, 'closed');
+    return this.getById(conversationId);
   }
 
   async followUp(id) { return this.db.get('SELECT * FROM follow_ups WHERE id = ?', id); }

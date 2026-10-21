@@ -220,6 +220,27 @@ test('policy: a due follow-up is sent and reschedules only up to the maximum', a
     (await db.all("SELECT * FROM follow_ups WHERE conversation_id = ? AND status = 'pending'", conversation.id)).length,
     0, 'nothing further is scheduled at the limit'
   );
+  // §18 "No Reply": every allowed follow-up went out and none was answered.
+  const unanswered = await system.conversations.getById(conversation.id);
+  assert.equal(unanswered.status, 'no_reply', 'the thread says it went unanswered');
+});
+
+test('§18 a closed thread is never written to again', async () => {
+  const { db, system, email } = await setup();
+  const { user, mission } = await stack(db, { mission: { followUpDelayDays: 2, maxFollowUps: 2 } });
+  const lead = await toEnd(system, user, mission);
+  const conversation = await system.conversations.getFor(lead.id, mission.id);
+
+  const closed = await system.conversations.closeConversation(conversation.id, 'closed by the user');
+  assert.equal(closed.status, 'closed', 'the thread is closed');
+
+  // Closing must not be undone by a scheduled follow-up.
+  await system.scheduler.scheduleFollowUps(new Date());
+  await drain(system.worker);
+  assert.equal(email.sent.length, 1, 'only the original message was sent — a closed thread receives no more');
+
+  const still = await system.conversations.getById(conversation.id);
+  assert.equal(still.status, 'closed', 'the thread stays closed');
 });
 
 test('policy: a reply prevents the scheduled follow-up from sending', async () => {

@@ -127,7 +127,9 @@ const TONE = {
   draft: 'faint', scheduled: 'cyan', running: 'green', paused: 'amber', stopped: 'faint',
   completed: 'green', archived: 'faint',
   queued: 'faint', succeeded: 'green', received: 'cyan', reply_received: 'green',
-};
+  no_reply: 'faint', closed: 'faint', delivered: 'cyan', opened: 'cyan',
+  follow_up_scheduled: 'cyan', follow_up_sent: 'cyan',
+  };
 const badge = (text, tone) => `<span class="badge ${tone || TONE[text] || 'faint'}">${esc(titleCase(text))}</span>`;
 const toneOf = (s) => TONE[s] || 'faint';
 
@@ -404,12 +406,40 @@ async function renderDashboard() {
     failed_jobs: ['Jobs stopped and will not retry on their own', 'activity', 'Open activity'],
     follow_ups_due: ['Follow-ups are due and will go out on the next window', 'inbox', 'Open inbox'],
   };
+  // §20 "current scouting state": whether the system can run at all, and why.
+  const SCOUTING = {
+    running: ['Scouting is live', 'green'],
+    idle: ['Ready — no mission is scheduled', 'cyan'],
+    paused: ['Paused — nothing will run', 'amber'],
+    needs_mailbox: ['Waiting for a mailbox', 'amber'],
+  };
+  const [scoutLabel, scoutTone] = SCOUTING[dash.scoutingState] || ['Unknown', 'faint'];
+  const nextRun = (dash.nextScouting || [])[0];
 
   setView(`
     ${onboardingPanel(dash, attention)}
+    <div class="panel pad-lg" style="margin-bottom:16px">
+      <div class="spread" style="align-items:center">
+        <div>
+          <div class="card-label">Automation</div>
+          <div class="row" style="gap:10px;margin-top:6px">
+            ${badge(scoutLabel, scoutTone)}
+            <span class="muted">${num(dash.missions.active)} of ${num(dash.missions.total)} mission${dash.missions.total === 1 ? '' : 's'} on a schedule</span>
+          </div>
+        </div>
+        <div class="row" style="gap:26px">
+          <div><div class="card-label">Next scouting</div>
+            <div class="small" style="margin-top:6px">${nextRun ? esc(nextRun.name) : 'Nothing scheduled'}</div>
+            <div class="faint small">${nextRun ? esc(fmtRel(nextRun.nextRunAt)) : ''}</div></div>
+          <div><div class="card-label">Timezone</div>
+            <div class="small" style="margin-top:6px">${esc(dash.timezone || state.user?.timezone || 'UTC')}</div></div>
+        </div>
+      </div>
+    </div>
+
     <div class="grid cols-4" style="margin-bottom:16px">
       ${stat('Missions', dash.missions.total, `${num(dash.missions.active)} running on a schedule`)}
-      ${stat('Prospects', dash.leads.discovered, `${num(dash.leads.sent)} contacted so far`)}
+      ${stat('Prospects', dash.leads.discovered, `${num(dash.leads.qualified)} qualified`)}
       ${stat('Messages sent', dash.messages.sent, `${num(dash.messages.generated)} written in total`)}
       ${stat('Replies', dash.conversations.replied, 'from businesses you wrote to')}
     </div>
@@ -1034,13 +1064,19 @@ async function renderInbox() {
     rows = rows.filter((c) => `${c.business_name || ''} ${c.mission_name || ''} ${c.last_body || ''}`
       .toLowerCase().includes(q));
   }
+  // §18 names the states a thread can be in. The filter groups the ones a
+  // person actually sorts by; the rest are still shown as a badge on the row.
   const groups = [
     { id: '', label: 'All' },
     { id: 'reply_received', label: 'Replied' },
     { id: 'sent', label: 'Sent' },
     { id: 'follow_up_scheduled', label: 'Follow-up scheduled' },
+    { id: 'follow_up_sent', label: 'Follow-up sent' },
+    { id: 'no_reply', label: 'No reply' },
     { id: 'suppressed', label: 'Suppressed' },
-  ].map((g) => ({ ...g, n: g.id ? rows.filter((c) => c.status === g.id).length : rows.length }));
+    { id: 'closed', label: 'Closed' },
+  ].map((g) => ({ ...g, n: g.id ? rows.filter((c) => c.status === g.id).length : rows.length }))
+    .filter((g) => g.id === '' || g.n > 0);
 
   setView(`
     <div class="spread" style="margin-bottom:14px">
@@ -1084,7 +1120,12 @@ async function renderConversation(id) {
   setView(`
     <div class="spread" style="margin-bottom:14px">
       <button class="btn small" data-nav="inbox">← Inbox</button>
-      <div class="row">${badge(c.status)}${lead ? `<button class="btn small" data-nav="leads/${lead.id}">${esc(lead.businessName)}</button>` : ''}</div>
+      <div class="row">
+        ${badge(c.status)}
+        ${lead ? `<button class="btn small" data-nav="leads/${lead.id}">${esc(lead.businessName)}</button>` : ''}
+        ${['closed', 'suppressed', 'reply_received'].includes(c.status)
+    ? '' : `<button class="btn small" data-act="close-thread" data-id="${c.id}">Close thread</button>`}
+      </div>
     </div>
     <div class="panel pad-lg">
       <div class="section-head"><h2>Thread</h2>
@@ -1556,6 +1597,15 @@ async function runAction(act, el) {
       }
       case 'read-notif': await api(`/api/notifications/${el.dataset.id}/read`, { method: 'POST', body: {} }); render(); return;
       case 'inbox-filter': inboxFilters.status = el.dataset.status || ''; renderInbox(); return;
+      case 'close-thread': {
+        el.disabled = true;
+        try {
+          await api(`/api/conversations/${el.dataset.id}/close`, { method: 'POST', body: {} });
+          toast('Thread closed. No further messages will be sent.', 'ok');
+          render();
+        } finally { el.disabled = false; }
+        return;
+      }
       case 'activity-filter': activityFilters.only = el.dataset.only || ''; activityFilters.missionId = el.dataset.mission || ''; renderActivity(); return;
       case 'activity-more': activityVisible += 38; renderActivity(); return;
       case 'toggle-pause': {

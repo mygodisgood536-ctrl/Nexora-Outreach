@@ -290,8 +290,7 @@ export function registerWorkspaceRoutes(router, system) {
     ctx.json(200, { conversations: rows });
   });
 
-  router.get('/api/conversations/:id', async (ctx) => {
-    const user = requireUser(ctx);
+  router.get('/api/conversations/:id', async (ctx) => {    const user = requireUser(ctx);
     const conversation = await conversations.getById(toId(ctx.params.id));
     // Ownership is checked before any related record is read.
     if (!conversation || conversation.user_id !== user.id) throw err.notFound('Conversation');
@@ -300,6 +299,19 @@ export function registerWorkspaceRoutes(router, system) {
       messages: await conversations.threadFor(conversation.id),
       lead: leads.toPublic(await leads.get(conversation.lead_id)),
     });
+  });
+
+  /**
+   * Close a thread (spec 18 "Closed"). Any pending follow-up is cancelled, so
+   * a closed thread can never receive another message.
+   */
+  router.post('/api/conversations/:id/close', async (ctx) => {
+    const user = requireUser(ctx);
+    const id = toId(ctx.params.id);
+    const conversation = await conversations.getById(id);
+    if (!conversation || conversation.user_id !== user.id) throw err.notFound('Conversation');
+    const closed = await conversations.closeConversation(id, 'closed by the user');
+    ctx.json(200, { conversation: closed });
   });
 
   /**
@@ -476,8 +488,18 @@ export function registerWorkspaceRoutes(router, system) {
       missions: { total: mine.length, active: active.length },
       leads: {
         discovered: await leads.count(user.id),
-        qualified: await countWhere(db, 'leads', 'user_id = ? AND status = ?', user.id, 'qualified'),
+        // "Qualified" means the prospect was judged relevant and became a
+        // candidate for outreach. Counting only the transient 'qualified'
+        // status reported zero for every account that had actually sent
+        // something, because the lead moves on to 'sent' and 'replied'.
+        qualified: await countWhere(
+          db,
+          'leads',
+          "user_id = ? AND status IN ('qualified', 'message_generated', 'awaiting_approval', 'sent', 'replied')",
+          user.id
+        ),
         sent: await countWhere(db, 'leads', 'user_id = ? AND status = ?', user.id, 'sent'),
+        replied: await countWhere(db, 'leads', 'user_id = ? AND status = ?', user.id, 'replied'),
       },
       websitesAnalyzed: await countWhere(
         db,
@@ -502,6 +524,7 @@ export function registerWorkspaceRoutes(router, system) {
         criticalUnread,
       },
       scoutingState,
+      timezone: user.timezone || 'UTC',
       itemsRequiringAttention: attention,
       unreadNotifications: await notifications.unreadCount(user.id),
       nextScouting,
